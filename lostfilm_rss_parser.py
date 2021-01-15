@@ -3,7 +3,7 @@
 
 import configparser
 import os
-import time
+import calendar
 import feedparser
 from telebot import TeleBot
 import requests
@@ -30,7 +30,7 @@ class ParserRSS:
 
     def __init__(self, feed):
         self.feed = feedparser.parse(feed)
-        self.fresh_timestamp = time.time()
+        self.fresh_timestamp = 0
         self.settings = Conf()
         self.bot = TlgrmBot(self.settings.botid, self.settings.chatid)
         self.entries = []
@@ -44,7 +44,7 @@ class ParserRSS:
     def clear_entries(self):
         for entry in self.feed['entries']:
             entry_date_time = entry['published_parsed']
-            entry_date_time_unix = time.mktime(entry_date_time)
+            entry_date_time_unix = calendar.timegm(entry_date_time)
             if entry_date_time_unix > self.settings.lastupdate:
                 entry_name = entry['title']
                 entry_link = entry['link']
@@ -54,12 +54,16 @@ class ParserRSS:
                 self.entries.append([entry_name_url, entry_pic_episode])
             else:
                 break
-        self.entries.reverse()
+        if self.entries:
+            self.fresh_timestamp = calendar.timegm(self.feed['entries'][0]['published_parsed'])
+            self.entries.reverse()
+            return True
+        return False
 
     def send_new_entries(self):
         self.settings.write('System', 'lastupdate', f'{self.fresh_timestamp}')
         for entry in self.entries:
-            self.bot.send_new(entry[1], entry[0])
+            self.bot.send(entry[1], entry[0])
 
 
 class Conf:
@@ -88,14 +92,14 @@ class Conf:
         self.config.add_section('System')
         self.config.set('Settings', 'botid', '000000000:00000000000000000000000000000000000')
         self.config.set('Settings', 'chatid', '00000000000000')
-        self.config.set('System', 'lastupdate', '0.0')
+        self.config.set('System', 'lastupdate', '0')
         with open(path, 'w') as config_file:
             self.config.write(config_file)
         raise FileNotFoundError(f'Required to fill data in config (section [Settings]): {self.config_file}')
 
     def read(self, section, setting):
         if setting == 'lastupdate':
-            value = self.config.getfloat(section, setting)
+            value = self.config.getint(section, setting)
         else:
             value = self.config.get(section, setting)
         return value
@@ -113,11 +117,10 @@ class TlgrmBot:
         self.chatid = chatid
         self.bot = TeleBot(self.botid)
 
-    def send_new(self, photo, caption):
+    def send(self, photo, caption):
         self.bot.send_photo(chat_id=self.chatid, photo=photo, caption=caption, parse_mode="Markdown")
 
 
-lostfilm = ParserRSS('https://www.lostfilm.run/rss.xml')
-if lostfilm.online():
-    lostfilm.clear_entries()
+lostfilm = ParserRSS('https://www.lostfilm.uno/rss.xml')
+if lostfilm.online() and lostfilm.clear_entries():
     lostfilm.send_new_entries()
