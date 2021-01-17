@@ -1,29 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import configparser
 import os
 import calendar
-import feedparser
-from telebot import TeleBot
 import requests
+import feedparser
+import configparser
+from telebot import TeleBot
 from bs4 import BeautifulSoup
+from urlextract import URLExtract
 
 
-# def extract_url(text):
-#     extractor = URLExtract()
-#     urls = extractor.find_urls(text)
-#     return urls[0]
+def extract_show_poster(text):
+    extractor = URLExtract()
+    urls = extractor.find_urls(text)
+    poster = urls[0].replace('image.jpg', 'poster.jpg')
+    return poster
 
 
-def extract_ep_poster(url):
+def extract_ep_poster(url, url_reserve):
     url = url.replace('/mr/', '/')
     page = str(BeautifulSoup(requests.get(url).content, 'html.parser'))
     start_link = page.find("/Posters/e_")
     start_quote = page.find('static.lostfilm', start_link)
     end_quote = page.find('.jpg', start_quote)
     url = page[start_quote: end_quote]
-    return 'http://' + url + '.jpg'
+    if url:
+        poster = 'http://' + url + '.jpg'
+    else:
+        poster = extract_show_poster(url_reserve)
+    return poster
 
 
 class ParserRSS:
@@ -49,8 +55,7 @@ class ParserRSS:
                 entry_name = entry['title']
                 entry_link = entry['link']
                 entry_name_url = f'[{entry_name}]({entry_link})'
-                entry_pic_episode = extract_ep_poster(entry_link)
-                # entry_pic = extract_url(entry['summary'])
+                entry_pic_episode = extract_ep_poster(url=entry_link, url_reserve=entry['summary'])
                 self.entries.append([entry_name_url, entry_pic_episode])
             else:
                 break
