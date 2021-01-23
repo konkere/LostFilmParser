@@ -7,29 +7,34 @@ import requests
 import feedparser
 import configparser
 from telebot import TeleBot
-from bs4 import BeautifulSoup
-from urlextract import URLExtract
+from urllib.parse import urljoin
+from html.parser import HTMLParser
 
 
-def extract_show_poster(text):
-    extractor = URLExtract()
-    urls = extractor.find_urls(text)
-    poster = urls[0].replace('image.jpg', 'poster.jpg')
+def poster_from_data(data):
+    poster = data[data.find('http'):]
+    poster = poster[:poster.find('image.jpg')]
+    poster = urljoin(poster, 'poster.jpg')
     return poster
 
 
-def extract_ep_poster(url, url_reserve):
-    url = url.replace('/mr/', '/')
-    page = str(BeautifulSoup(requests.get(url).content, 'html.parser'))
-    start_link = page.find("/Posters/e_")
-    start_quote = page.find('static.lostfilm', start_link)
-    end_quote = page.find('.jpg', start_quote)
-    url = page[start_quote: end_quote]
-    if url:
-        poster = 'http://' + url + '.jpg'
-    else:
-        poster = extract_show_poster(url_reserve)
-    return poster
+class Extractor(HTMLParser):
+
+    def __init__(self, url, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.url = url.replace('/mr/', '/')
+        self.og_image = ''
+        self.og_description = ''
+        self.feed(requests.get(self.url).text)
+
+    def handle_starttag(self, tag, attrs):
+        if not tag == 'meta':
+            return
+        attrs = dict(attrs)
+        if 'property' in attrs and attrs['property'] == 'og:image':
+            self.og_image = attrs['content']
+        elif 'property' in attrs and attrs['property'] == 'og:description':
+            self.og_description = attrs['content']
 
 
 class ParserRSS:
@@ -52,11 +57,7 @@ class ParserRSS:
             entry_date_time = entry['published_parsed']
             entry_date_time_unix = calendar.timegm(entry_date_time)
             if entry_date_time_unix > self.settings.lastupdate:
-                entry_name = entry['title']
-                entry_link = entry['link']
-                entry_name_url = f'[{entry_name}]({entry_link})'
-                entry_pic_episode = extract_ep_poster(url=entry_link, url_reserve=entry['summary'])
-                self.entries.append([entry_name_url, entry_pic_episode])
+                self.new_entry_preparation(entry)
             else:
                 break
         if self.entries:
@@ -64,6 +65,18 @@ class ParserRSS:
             self.entries.reverse()
             return True
         return False
+
+    def new_entry_preparation(self, entry):
+        entry_name = entry['title']
+        entry_link = entry['link']
+        entry_extractor = Extractor(entry_link)
+        if entry_extractor.og_image:
+            entry_pic_episode = entry_extractor.og_image
+        else:
+            entry_pic_episode = poster_from_data(entry['summary'])
+        entry_description = entry_extractor.og_description
+        entry_caption = f'[{entry_name}]({entry_link})\n\n{entry_description}'
+        self.entries.append([entry_caption, entry_pic_episode])
 
     def send_new_entries(self):
         self.settings.write('System', 'lastupdate', f'{self.fresh_timestamp}')
@@ -74,8 +87,8 @@ class ParserRSS:
 class Conf:
 
     def __init__(self):
-        self.work_dir = os.getenv('HOME') + '/.LostFilmRSS'
-        self.config_file = self.work_dir + '/settings.conf'
+        self.work_dir = os.path.join(os.getenv('HOME'), '.LostFilmRSS')
+        self.config_file = os.path.join(self.work_dir, 'settings.conf')
         self.config = configparser.ConfigParser()
         self.exist()
         self.config.read(self.config_file)
