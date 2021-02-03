@@ -143,8 +143,8 @@ class TlgrmBot:
             self.bot.get_me()
         except Exception:
             return False
-        return True
-
+        else:
+            return True
 
 
 lostfilm = ParserRSS('https://www.lostfilm.uno/rss.xml')
