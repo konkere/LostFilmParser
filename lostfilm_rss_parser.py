@@ -79,9 +79,9 @@ class ParserRSS:
         self.entries.append([entry_caption, entry_pic_episode])
 
     def send_new_entries(self):
-        self.settings.write('System', 'lastupdate', f'{self.fresh_timestamp}')
         for entry in self.entries:
             self.bot.send(entry[1], entry[0])
+        self.settings.write('System', 'lastupdate', f'{self.fresh_timestamp}')
 
 
 class Conf:
@@ -138,7 +138,15 @@ class TlgrmBot:
     def send(self, photo, caption):
         self.bot.send_photo(chat_id=self.chatid, photo=photo, caption=caption, parse_mode="Markdown")
 
+    def alive(self):
+        try:
+            self.bot.get_me()
+        except Exception:
+            return False
+        return True
+
+
 
 lostfilm = ParserRSS('https://www.lostfilm.uno/rss.xml')
-if lostfilm.online() and lostfilm.clear_entries():
+if lostfilm.online() and lostfilm.bot.alive() and lostfilm.clear_entries():
     lostfilm.send_new_entries()
