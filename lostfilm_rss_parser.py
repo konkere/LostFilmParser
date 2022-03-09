@@ -18,6 +18,32 @@ def poster_from_data(data):
     return poster
 
 
+def markdownv2_converter(text):
+    symbols_for_replace = {
+        "_": "\_",
+        "*": "\*",
+        "[": "\[",
+        "]": "\]",
+        "(": "\(",
+        ")": "\)",
+        "~": "\~",
+        "`": "\`",
+        ">": "\>",
+        "#": "\#",
+        "+": "\+",
+        "-": "\-",
+        "=": "\=",
+        "|": "\|",
+        "{": "\{",
+        "}": "\}",
+        ".": "\.",
+        "!": "\!",
+    }
+    for symbol in symbols_for_replace:
+        text = text.replace(symbol, symbols_for_replace[symbol])
+    return text
+
+
 class Extractor(HTMLParser):
 
     def __init__(self, url, *args, **kwargs):
@@ -39,10 +65,10 @@ class Extractor(HTMLParser):
 
 class ParserRSS:
 
-    def __init__(self, feed):
-        self.feed = feedparser.parse(feed)
+    def __init__(self):
         self.fresh_timestamp = 0
         self.settings = Conf()
+        self.feed = feedparser.parse(self.settings.source_rss)
         self.bot = TlgrmBot(self.settings.botid, self.settings.chatid)
         self.entries = []
 
@@ -67,14 +93,17 @@ class ParserRSS:
         return False
 
     def new_entry_preparation(self, entry):
-        entry_name = entry['title']
+        entry_name = markdownv2_converter(entry['title'])
         entry_link = entry['link']
         entry_extractor = Extractor(entry_link)
         if entry_extractor.og_image:
             entry_pic_episode = entry_extractor.og_image
         else:
             entry_pic_episode = poster_from_data(entry['summary'])
-        entry_description = entry_extractor.og_description
+        if entry_extractor.og_description:
+            entry_description = "Описание:\n||" + markdownv2_converter(entry_extractor.og_description) + "||"
+        else:
+            entry_description = ""
         entry_caption = f'[{entry_name}]({entry_link})\n\n{entry_description}'
         self.entries.append([entry_caption, entry_pic_episode])
 
@@ -94,6 +123,7 @@ class Conf:
         self.config.read(self.config_file)
         self.botid = self.read('Settings', 'botid')
         self.chatid = self.read('Settings', 'chatid')
+        self.source_rss = self.read('System', 'source')
         self.lastupdate = self.read('System', 'lastupdate')
 
     def exist(self):
@@ -110,6 +140,7 @@ class Conf:
         self.config.add_section('System')
         self.config.set('Settings', 'botid', '000000000:00000000000000000000000000000000000')
         self.config.set('Settings', 'chatid', '00000000000000')
+        self.config.set('System', 'source', 'https://www.lostfilmtv5.site/rss.xml')
         self.config.set('System', 'lastupdate', '0')
         with open(path, 'w') as config_file:
             self.config.write(config_file)
@@ -136,7 +167,7 @@ class TlgrmBot:
         self.bot = TeleBot(self.botid)
 
     def send(self, photo, caption):
-        self.bot.send_photo(chat_id=self.chatid, photo=photo, caption=caption, parse_mode="Markdown")
+        self.bot.send_photo(chat_id=self.chatid, photo=photo, caption=caption, parse_mode="MarkdownV2")
 
     def alive(self):
         try:
@@ -147,6 +178,6 @@ class TlgrmBot:
             return True
 
 
-lostfilm = ParserRSS('https://www.lostfilm.uno/rss.xml')
+lostfilm = ParserRSS()
 if lostfilm.online() and lostfilm.bot.alive() and lostfilm.clear_entries():
     lostfilm.send_new_entries()
