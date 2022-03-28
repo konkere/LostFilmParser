@@ -19,28 +19,9 @@ def poster_from_data(data):
 
 
 def markdownv2_converter(text):
-    symbols_for_replace = {
-        "_": "\_",
-        "*": "\*",
-        "[": "\[",
-        "]": "\]",
-        "(": "\(",
-        ")": "\)",
-        "~": "\~",
-        "`": "\`",
-        ">": "\>",
-        "#": "\#",
-        "+": "\+",
-        "-": "\-",
-        "=": "\=",
-        "|": "\|",
-        "{": "\{",
-        "}": "\}",
-        ".": "\.",
-        "!": "\!",
-    }
+    symbols_for_replace = ["_", "*", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!"]
     for symbol in symbols_for_replace:
-        text = text.replace(symbol, symbols_for_replace[symbol])
+        text = text.replace(symbol, "\\" + symbol)
     return text
 
 
@@ -79,10 +60,13 @@ class ParserRSS:
             return False
 
     def clear_entries(self):
+        trash_entry = "). . ("
         for entry in self.feed['entries']:
             entry_date_time = entry['published_parsed']
             entry_date_time_unix = calendar.timegm(entry_date_time)
-            if entry_date_time_unix > self.settings.lastupdate:
+            if trash_entry in entry['title']:
+                continue
+            elif entry_date_time_unix > self.settings.lastupdate:
                 self.new_entry_preparation(entry)
             else:
                 break
