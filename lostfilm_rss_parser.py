@@ -2,10 +2,12 @@
 # -*- coding: utf-8 -*-
 
 import os
+import json
 import calendar
 import requests
 import feedparser
 import configparser
+from time import gmtime
 from telebot import TeleBot
 from urllib.parse import urljoin
 from html.parser import HTMLParser
@@ -19,9 +21,9 @@ def poster_from_data(data):
 
 
 def markdownv2_converter(text):
-    symbols_for_replace = ["_", "*", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!"]
+    symbols_for_replace = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
     for symbol in symbols_for_replace:
-        text = text.replace(symbol, "\\" + symbol)
+        text = text.replace(symbol, '\\' + symbol)
     return text
 
 
@@ -47,8 +49,14 @@ class Extractor(HTMLParser):
 class ParserRSS:
 
     def __init__(self):
-        self.fresh_timestamp = 0
+        self.old_entries_delta = 2678400  # one month
+        self.old_entries_frontier = calendar.timegm(gmtime()) - self.old_entries_delta
         self.settings = Conf()
+        self.entries_db_file = os.path.join(self.settings.work_dir, 'entries.db')
+        try:
+            self.entries_db = json.load(open(self.entries_db_file))
+        except FileNotFoundError:
+            self.entries_db = {}
         self.feed = feedparser.parse(self.settings.source_rss)
         self.bot = TlgrmBot(self.settings.botid, self.settings.chatid)
         self.entries = []
@@ -62,22 +70,19 @@ class ParserRSS:
     def clear_entries(self):
         trash_entry = "). . ("
         for entry in self.feed['entries']:
-            entry_date_time = entry['published_parsed']
-            entry_date_time_unix = calendar.timegm(entry_date_time)
             if trash_entry in entry['title']:
                 continue
-            elif entry_date_time_unix > self.settings.lastupdate:
+            elif entry['title'] not in self.entries_db:
                 self.new_entry_preparation(entry)
-            else:
-                break
         if self.entries:
-            self.fresh_timestamp = calendar.timegm(self.feed['entries'][0]['published_parsed'])
             self.entries.reverse()
             return True
         return False
 
     def new_entry_preparation(self, entry):
-        entry_name = markdownv2_converter(entry['title'])
+        entry_name_orig = entry['title']
+        entry_timestamp = calendar.timegm(entry['published_parsed'])
+        entry_name_converted = markdownv2_converter(entry_name_orig)
         entry_link = entry['link']
         entry_extractor = Extractor(entry_link)
         if entry_extractor.og_image:
@@ -85,16 +90,27 @@ class ParserRSS:
         else:
             entry_pic_episode = poster_from_data(entry['summary'])
         if entry_extractor.og_description:
-            entry_description = "Описание:\n||" + markdownv2_converter(entry_extractor.og_description) + "||"
+            entry_description = 'Описание:\n||' + markdownv2_converter(entry_extractor.og_description) + '||'
         else:
-            entry_description = ""
-        entry_caption = f'[{entry_name}]({entry_link})\n\n{entry_description}'
-        self.entries.append([entry_caption, entry_pic_episode])
+            entry_description = ''
+        entry_caption = f'[{entry_name_converted}]({entry_link})\n\n{entry_description}'
+        self.entries.append([entry_name_orig, entry_timestamp, entry_caption, entry_pic_episode])
 
     def send_new_entries(self):
         for entry in self.entries:
-            self.bot.send(entry[1], entry[0])
-        self.settings.write('System', 'lastupdate', f'{self.fresh_timestamp}')
+            self.bot.send(entry[3], entry[2])
+            self.entries_db[entry[0]] = entry[1]
+        self.clear_old_entries()
+        with open(self.entries_db_file, 'w', encoding='utf8') as dump_file:
+            json.dump(self.entries_db, dump_file, ensure_ascii=False)
+
+    def clear_old_entries(self):
+        old_entries = []
+        for name, timestamp in self.entries_db.items():
+            if self.old_entries_frontier > timestamp:
+                old_entries.append(name)
+        for name in old_entries:
+            del self.entries_db[name]
 
 
 class Conf:
@@ -108,7 +124,6 @@ class Conf:
         self.botid = self.read('Settings', 'botid')
         self.chatid = self.read('Settings', 'chatid')
         self.source_rss = self.read('System', 'source')
-        self.lastupdate = self.read('System', 'lastupdate')
 
     def exist(self):
         if not os.path.isdir(self.work_dir):
@@ -125,21 +140,17 @@ class Conf:
         self.config.set('Settings', 'botid', '000000000:00000000000000000000000000000000000')
         self.config.set('Settings', 'chatid', '00000000000000')
         self.config.set('System', 'source', 'https://www.lostfilmtv5.site/rss.xml')
-        self.config.set('System', 'lastupdate', '0')
         with open(path, 'w') as config_file:
             self.config.write(config_file)
         raise FileNotFoundError(f'Required to fill data in config (section [Settings]): {self.config_file}')
 
     def read(self, section, setting):
-        if setting == 'lastupdate':
-            value = self.config.getint(section, setting)
-        else:
-            value = self.config.get(section, setting)
+        value = self.config.get(section, setting)
         return value
 
     def write(self, section, setting, value):
         self.config.set(section, setting, value)
-        with open(self.config_file, "w") as config_file:
+        with open(self.config_file, 'w') as config_file:
             self.config.write(config_file)
 
 
