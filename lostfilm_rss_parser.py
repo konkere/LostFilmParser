@@ -49,7 +49,7 @@ class Extractor(HTMLParser):
 class ParserRSS:
 
     def __init__(self):
-        self.old_entries_delta = 2678400  # one month
+        self.old_entries_delta = (2678400 * 3)  # one month x3
         self.old_entries_frontier = calendar.timegm(gmtime()) - self.old_entries_delta
         self.settings = Conf()
         self.entries_db_file = os.path.join(self.settings.work_dir, 'entries.db')
@@ -130,28 +130,23 @@ class Conf:
             os.mkdir(self.work_dir)
         if not os.path.exists(self.config_file):
             try:
-                self.create(self.config_file)
+                self.create()
             except FileNotFoundError as exc:
                 print(exc)
 
-    def create(self, path):
+    def create(self):
         self.config.add_section('Settings')
         self.config.add_section('System')
         self.config.set('Settings', 'botid', '000000000:00000000000000000000000000000000000')
         self.config.set('Settings', 'chatid', '00000000000000')
         self.config.set('System', 'source', 'https://www.lostfilmtv5.site/rss.xml')
-        with open(path, 'w') as config_file:
+        with open(self.config_file, 'w') as config_file:
             self.config.write(config_file)
         raise FileNotFoundError(f'Required to fill data in config (section [Settings]): {self.config_file}')
 
     def read(self, section, setting):
         value = self.config.get(section, setting)
         return value
-
-    def write(self, section, setting, value):
-        self.config.set(section, setting, value)
-        with open(self.config_file, 'w') as config_file:
-            self.config.write(config_file)
 
 
 class TlgrmBot:
