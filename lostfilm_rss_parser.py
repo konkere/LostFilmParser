@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import re
 import json
 import calendar
 import requests
@@ -20,6 +21,19 @@ def poster_from_data(data):
     return poster
 
 
+def episode_info_from_data(data):
+    episode_info = {}
+    pattern = r'^Сериал (.*) \((.*)\): (\d+).* (\d+).*, (.*) \((.*)\). .*'
+    re_episode_info = re.match(pattern, data)
+    episode_info['show_name_ru'] = re_episode_info.group(1)
+    episode_info['show_name'] = re_episode_info.group(2)
+    episode_info['season_number'] = int(re_episode_info.group(3))
+    episode_info['number'] = int(re_episode_info.group(4))
+    episode_info['name_ru'] = re_episode_info.group(5)
+    episode_info['name'] = re_episode_info.group(6)
+    return episode_info
+
+
 def markdownv2_converter(text):
     symbols_for_replace = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
     for symbol in symbols_for_replace:
@@ -34,6 +48,7 @@ class Extractor(HTMLParser):
         self.url = url.replace('/mr/', '/')
         self.og_image = ''
         self.og_description = ''
+        self.episode_info = {}
         self.feed(requests.get(self.url).text)
 
     def handle_starttag(self, tag, attrs):
@@ -44,6 +59,8 @@ class Extractor(HTMLParser):
             self.og_image = attrs['content']
         elif 'property' in attrs and attrs['property'] == 'og:description':
             self.og_description = attrs['content']
+        elif 'name' in attrs and attrs['name'] == 'description':
+            self.episode_info = episode_info_from_data(attrs['content'])
 
 
 class ParserRSS:
@@ -60,6 +77,7 @@ class ParserRSS:
         self.feed = feedparser.parse(self.settings.source_rss)
         self.bot = TlgrmBot(self.settings.botid, self.settings.chatid)
         self.entries = []
+        self.pattern = r'^(.*) \((.*)\). (.*). \(S(\d+)E(\d+)\)'
 
     def online(self):
         if self.feed['status'] == 200:
@@ -68,11 +86,13 @@ class ParserRSS:
             return False
 
     def clear_entries(self):
-        trash_entry = "). . ("
         for entry in self.feed['entries']:
-            if trash_entry in entry['title']:
-                continue
-            elif entry['title'] not in self.entries_db:
+            entry_stamp = {}
+            re_entry = re.match(self.pattern, entry['title'])
+            entry_stamp['show_name'] = re_entry.group(2)
+            entry_stamp['season_number'] = int(re_entry.group(4))
+            entry_stamp['number'] = int(re_entry.group(5))
+            if entry_stamp not in self.entries_db.values():
                 self.new_entry_preparation(entry)
         if self.entries:
             self.entries.reverse()
@@ -80,11 +100,10 @@ class ParserRSS:
         return False
 
     def new_entry_preparation(self, entry):
-        entry_name_orig = entry['title']
-        entry_timestamp = calendar.timegm(entry['published_parsed'])
-        entry_name_converted = markdownv2_converter(entry_name_orig)
         entry_link = entry['link']
         entry_extractor = Extractor(entry_link)
+        episode = entry_extractor.episode_info
+        entry_timestamp = calendar.timegm(entry['published_parsed'])
         if entry_extractor.og_image:
             entry_pic_episode = entry_extractor.og_image
         else:
@@ -93,24 +112,33 @@ class ParserRSS:
             entry_description = 'Описание:\n||' + markdownv2_converter(entry_extractor.og_description) + '||'
         else:
             entry_description = ''
-        entry_caption = f'[{entry_name_converted}]({entry_link})\n\n{entry_description}'
-        self.entries.append([entry_name_orig, entry_timestamp, entry_caption, entry_pic_episode])
+        episode['link'] = entry_link
+        episode['description'] = entry_description
+        episode['pic'] = entry_pic_episode
+        episode['timestamp'] = entry_timestamp
+        self.entries.append(episode)
 
     def send_new_entries(self):
         for entry in self.entries:
-            self.bot.send(entry[3], entry[2])
-            self.entries_db[entry[0]] = entry[1]
+            episode = {}
+            self.bot.send(entry)
+            episode['show_name'] = entry['show_name']
+            episode['season_number'] = entry['season_number']
+            episode['number'] = entry['number']
+            timestamp = entry['timestamp']
+            self.entries_db[timestamp] = episode
         self.clear_old_entries()
         with open(self.entries_db_file, 'w', encoding='utf8') as dump_file:
             json.dump(self.entries_db, dump_file, ensure_ascii=False)
 
     def clear_old_entries(self):
         old_entries = []
-        for name, timestamp in self.entries_db.items():
-            if self.old_entries_frontier > timestamp:
-                old_entries.append(name)
-        for name in old_entries:
-            del self.entries_db[name]
+        for timestamp in self.entries_db.keys():
+            if self.old_entries_frontier > int(timestamp):
+                old_entries.append(timestamp)
+        if old_entries:
+            for timestamp in old_entries:
+                del self.entries_db[timestamp]
 
 
 class Conf:
@@ -156,8 +184,18 @@ class TlgrmBot:
         self.chatid = chatid
         self.bot = TeleBot(self.botid)
 
-    def send(self, photo, caption):
-        self.bot.send_photo(chat_id=self.chatid, photo=photo, caption=caption, parse_mode="MarkdownV2")
+    def send(self, episode):
+        photo = episode['pic']
+        show_name = markdownv2_converter(f'{episode["show_name_ru"]} ({episode["show_name"]})')
+        episode_numbers = markdownv2_converter(f'{episode["season_number"]} сезон, {episode["number"]} эпизод')
+        if episode["name_ru"]:
+            episode_name = markdownv2_converter(f'{episode["name_ru"]} ({episode["name"]})')
+        else:
+            episode_name = markdownv2_converter(f'{episode["name"]}')
+        episode_link = episode['link']
+        description = episode['description']
+        caption = f'*{show_name}*\n{episode_numbers}:\n[{episode_name}]({episode_link})\n\n{description}'
+        self.bot.send_photo(chat_id=self.chatid, photo=photo, caption=caption, parse_mode='MarkdownV2')
 
     def alive(self):
         try:
