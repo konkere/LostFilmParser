@@ -125,7 +125,7 @@ class ParserRSS:
             episode['show_name'] = entry['show_name']
             episode['season_number'] = entry['season_number']
             episode['number'] = entry['number']
-            timestamp = entry['timestamp']
+            timestamp = self.timestamp_uniq(entry['timestamp'])
             self.entries_db[timestamp] = episode
         self.clear_old_entries()
         with open(self.entries_db_file, 'w', encoding='utf8') as dump_file:
@@ -139,6 +139,13 @@ class ParserRSS:
         if old_entries:
             for timestamp in old_entries:
                 del self.entries_db[timestamp]
+
+    def timestamp_uniq(self, timestamp):
+        while True:
+            if str(timestamp) in self.entries_db.keys():
+                timestamp += 1
+            else:
+                return str(timestamp)
 
 
 class Conf:
