@@ -193,6 +193,7 @@ class ParserRSS:
 
     def check_update_description(self, entry, entry_in_db):
         episode = parse_data_from_entry(entry)
+        print(entry)
         if not self.entries_db[entry_in_db]['description'] and episode['description']:
             caption, description = generate_caption(episode)
             message_id = self.entries_db[entry_in_db]['message_id']
