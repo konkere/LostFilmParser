@@ -41,6 +41,40 @@ def markdownv2_converter(text):
     return text
 
 
+def generate_caption(entry):
+    show_name = markdownv2_converter(f'{entry["show_name_ru"]} ({entry["show_name"]})')
+    episode_numbers = markdownv2_converter(f'{entry["season_number"]} сезон, {entry["number"]} эпизод')
+    if entry["name_ru"]:
+        episode_name = markdownv2_converter(f'{entry["name_ru"]} ({entry["name"]})')
+    else:
+        episode_name = markdownv2_converter(f'{entry["name"]}')
+    episode_link = entry['link']
+    description_text = entry['description']
+    description = bool(description_text)
+    caption = f'*{show_name}*\n{episode_numbers}:\n[{episode_name}]({episode_link})\n\n{description_text}'
+    return caption, description
+
+
+def parse_data_from_entry(entry):
+    entry_link = entry['link']
+    entry_extractor = Extractor(entry_link)
+    episode = entry_extractor.episode_info
+    entry_timestamp = calendar.timegm(entry['published_parsed'])
+    if entry_extractor.og_image:
+        entry_pic_episode = entry_extractor.og_image
+    else:
+        entry_pic_episode = poster_from_data(entry['summary'])
+    if entry_extractor.og_description:
+        entry_description = 'Описание:\n||' + markdownv2_converter(entry_extractor.og_description) + '||'
+    else:
+        entry_description = ''
+    episode['link'] = entry_link
+    episode['description'] = entry_description
+    episode['pic'] = entry_pic_episode
+    episode['timestamp'] = entry_timestamp
+    return episode
+
+
 class Extractor(HTMLParser):
 
     def __init__(self, url, *args, **kwargs):
@@ -85,6 +119,10 @@ class ParserRSS:
         else:
             return False
 
+    def update_db(self):
+        with open(self.entries_db_file, 'w', encoding='utf8') as dump_file:
+            json.dump(self.entries_db, dump_file, ensure_ascii=False)
+
     def clear_entries(self):
         for entry in self.feed['entries']:
             entry_stamp = {}
@@ -92,44 +130,39 @@ class ParserRSS:
             entry_stamp['show_name'] = re_entry.group(2)
             entry_stamp['season_number'] = int(re_entry.group(4))
             entry_stamp['number'] = int(re_entry.group(5))
-            if entry_stamp not in self.entries_db.values():
+            entry_in_db = self.entry_in_db(entry_stamp)
+            if not entry_in_db:
                 self.new_entry_preparation(entry)
+            else:
+                self.check_update_description(entry, entry_in_db)
         if self.entries:
             self.entries.reverse()
             return True
         return False
 
     def new_entry_preparation(self, entry):
-        entry_link = entry['link']
-        entry_extractor = Extractor(entry_link)
-        episode = entry_extractor.episode_info
-        entry_timestamp = calendar.timegm(entry['published_parsed'])
-        if entry_extractor.og_image:
-            entry_pic_episode = entry_extractor.og_image
-        else:
-            entry_pic_episode = poster_from_data(entry['summary'])
-        if entry_extractor.og_description:
-            entry_description = 'Описание:\n||' + markdownv2_converter(entry_extractor.og_description) + '||'
-        else:
-            entry_description = ''
-        episode['link'] = entry_link
-        episode['description'] = entry_description
-        episode['pic'] = entry_pic_episode
-        episode['timestamp'] = entry_timestamp
+        episode = parse_data_from_entry(entry)
         self.entries.append(episode)
 
     def send_new_entries(self):
         for entry in self.entries:
-            episode = {}
-            self.bot.send(entry)
-            episode['show_name'] = entry['show_name']
-            episode['season_number'] = entry['season_number']
-            episode['number'] = entry['number']
-            timestamp = self.timestamp_uniq(entry['timestamp'])
-            self.entries_db[timestamp] = episode
+            pic = entry['pic']
+            caption, description = generate_caption(entry)
+            message_id = self.bot.send(pic, caption)
+            self.add_episode_to_db(entry, message_id, description)
         self.clear_old_entries()
-        with open(self.entries_db_file, 'w', encoding='utf8') as dump_file:
-            json.dump(self.entries_db, dump_file, ensure_ascii=False)
+        self.update_db()
+
+    def add_episode_to_db(self, entry, message_id, description):
+        episode = {
+            'message_id': message_id,
+            'show_name': entry['show_name'],
+            'season_number': entry['season_number'],
+            'number': entry['number'],
+            'description': description,
+        }
+        timestamp = self.timestamp_uniq(entry['timestamp'])
+        self.entries_db[timestamp] = episode
 
     def clear_old_entries(self):
         old_entries = []
@@ -146,6 +179,26 @@ class ParserRSS:
                 timestamp += 1
             else:
                 return str(timestamp)
+
+    def entry_in_db(self, stamp):
+        for timestamp in self.entries_db.keys():
+            available = (
+                stamp['show_name'] == self.entries_db[timestamp]['show_name'] and
+                stamp['season_number'] == self.entries_db[timestamp]['season_number'] and
+                stamp['number'] == self.entries_db[timestamp]['number']
+            )
+            if available:
+                return timestamp
+        return False
+
+    def check_update_description(self, entry, entry_in_db):
+        episode = parse_data_from_entry(entry)
+        if not self.entries_db[entry_in_db]['description'] and episode['description']:
+            caption, description = generate_caption(episode)
+            message_id = self.entries_db[entry_in_db]['message_id']
+            self.bot.edit(message_id, caption)
+            self.entries_db[entry_in_db]['description'] = description
+            self.update_db()
 
 
 class Conf:
@@ -191,18 +244,22 @@ class TlgrmBot:
         self.chatid = chatid
         self.bot = TeleBot(self.botid)
 
-    def send(self, episode):
-        photo = episode['pic']
-        show_name = markdownv2_converter(f'{episode["show_name_ru"]} ({episode["show_name"]})')
-        episode_numbers = markdownv2_converter(f'{episode["season_number"]} сезон, {episode["number"]} эпизод')
-        if episode["name_ru"]:
-            episode_name = markdownv2_converter(f'{episode["name_ru"]} ({episode["name"]})')
-        else:
-            episode_name = markdownv2_converter(f'{episode["name"]}')
-        episode_link = episode['link']
-        description = episode['description']
-        caption = f'*{show_name}*\n{episode_numbers}:\n[{episode_name}]({episode_link})\n\n{description}'
-        self.bot.send_photo(chat_id=self.chatid, photo=photo, caption=caption, parse_mode='MarkdownV2')
+    def send(self, pic, caption):
+        message = self.bot.send_photo(
+            chat_id=self.chatid,
+            photo=pic,
+            caption=caption,
+            parse_mode='MarkdownV2',
+        )
+        return message.message_id
+
+    def edit(self, message_id, caption):
+        self.bot.edit_message_caption(
+            caption=caption,
+            chat_id=self.chatid,
+            message_id=message_id,
+            parse_mode='MarkdownV2'
+        )
 
     def alive(self):
         try:
