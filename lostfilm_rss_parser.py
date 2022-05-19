@@ -23,7 +23,7 @@ def poster_from_data(data):
 
 def episode_info_from_data(data):
     episode_info = {}
-    pattern = r'^Сериал (.*) \((.*)\): (\d+).* (\d+).*, (.*) \((.*)\). .*'
+    pattern = r'^Сериал (.*) \((.*)\): (\d+) сезон (\d+) серия, (.*) \((.*)\). Фото.*'
     re_episode_info = re.match(pattern, data)
     episode_info['show_name_ru'] = re_episode_info.group(1)
     episode_info['show_name'] = re_episode_info.group(2)
