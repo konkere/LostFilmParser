@@ -42,7 +42,10 @@ def markdownv2_converter(text):
 
 
 def generate_caption(entry):
-    show_name = markdownv2_converter(f'{entry["show_name_ru"]} ({entry["show_name"]})')
+    if entry["show_name"] == entry["show_name_ru"]:
+        show_name = markdownv2_converter(f'{entry["show_name"]}')
+    else:
+        show_name = markdownv2_converter(f'{entry["show_name_ru"]} ({entry["show_name"]})')
     episode_numbers = markdownv2_converter(f'{entry["season_number"]} сезон, {entry["number"]} эпизод')
     if entry["name_ru"]:
         episode_name = markdownv2_converter(f'{entry["name_ru"]} ({entry["name"]})')
