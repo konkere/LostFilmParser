@@ -46,7 +46,10 @@ def generate_caption(entry):
         show_name = markdownv2_converter(f'{entry["show_name"]}')
     else:
         show_name = markdownv2_converter(f'{entry["show_name_ru"]} ({entry["show_name"]})')
-    episode_numbers = markdownv2_converter(f'{entry["season_number"]} сезон, {entry["number"]} эпизод')
+    if entry["season_number"] == 999:
+        episode_numbers = markdownv2_converter(f'Спецэпизод {entry["number"]}')
+    else:
+        episode_numbers = markdownv2_converter(f'{entry["season_number"]} сезон, {entry["number"]} эпизод')
     if entry["name_ru"]:
         episode_name = markdownv2_converter(f'{entry["name_ru"]} ({entry["name"]})')
     else:
@@ -115,6 +118,7 @@ class ParserRSS:
         self.bot = TlgrmBot(self.settings.botid, self.settings.chatid)
         self.entries = []
         self.pattern = r'^(.*) \((.*)\). (.*). \(S(\d+)E(\d+)\)'
+        self.pattern_sp = r'^(.*) \((.*)\). (.*). \((.*) (\d+)\)'
 
     def online(self):
         if self.feed['status'] == 200:
@@ -129,9 +133,13 @@ class ParserRSS:
     def clear_entries(self):
         for entry in self.feed['entries']:
             entry_stamp = {}
-            re_entry = re.match(self.pattern, entry['title'])
+            try:
+                re_entry = re.match(self.pattern, entry['title'])
+                entry_stamp['season_number'] = int(re_entry.group(4))
+            except AttributeError:
+                re_entry = re.match(self.pattern_sp, entry['title'])
+                entry_stamp['season_number'] = 999
             entry_stamp['show_name'] = re_entry.group(2)
-            entry_stamp['season_number'] = int(re_entry.group(4))
             entry_stamp['number'] = int(re_entry.group(5))
             entry_in_db = self.entry_in_db(entry_stamp)
             if not entry_in_db:
