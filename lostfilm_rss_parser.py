@@ -10,8 +10,8 @@ import feedparser
 import configparser
 from time import gmtime
 from telebot import TeleBot
+from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-from html.parser import HTMLParser
 
 
 def poster_from_data(data):
@@ -23,7 +23,7 @@ def poster_from_data(data):
 
 def episode_info_from_data(data):
     episode_info = {}
-    pattern = r'^Сериал (.*) \((.*)\): (\d+) сезон (\d+) серия, (.*) \((.*)\). Фото.*'
+    pattern = r'^(.*) \((.*)\). (\d+) сезон (\d+) серия, (.*?[.]*?) \((.*)\): кадры.*$'
     re_episode_info = re.match(pattern, data)
     episode_info['show_name_ru'] = re_episode_info.group(1)
     episode_info['show_name'] = re_episode_info.group(2)
@@ -63,15 +63,14 @@ def generate_caption(entry):
 
 def parse_data_from_entry(entry):
     entry_link = entry['link']
-    entry_extractor = Extractor(entry_link)
-    episode = entry_extractor.episode_info
+    og_image, og_description, episode = extractor(entry_link)
     entry_timestamp = calendar.timegm(entry['published_parsed'])
-    if entry_extractor.og_image:
-        entry_pic_episode = entry_extractor.og_image
+    if og_image:
+        entry_pic_episode = og_image
     else:
         entry_pic_episode = poster_from_data(entry['summary'])
-    if entry_extractor.og_description:
-        entry_description = 'Описание:\n||' + markdownv2_converter(entry_extractor.og_description) + '||'
+    if og_description:
+        entry_description = 'Описание:\n||' + markdownv2_converter(og_description) + '||'
     else:
         entry_description = ''
     episode['link'] = entry_link
@@ -81,26 +80,21 @@ def parse_data_from_entry(entry):
     return episode
 
 
-class Extractor(HTMLParser):
-
-    def __init__(self, url, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.url = url.replace('/mr/', '/')
-        self.og_image = ''
-        self.og_description = ''
-        self.episode_info = {}
-        self.feed(requests.get(self.url).text)
-
-    def handle_starttag(self, tag, attrs):
-        if not tag == 'meta':
-            return
-        attrs = dict(attrs)
-        if 'property' in attrs and attrs['property'] == 'og:image':
-            self.og_image = attrs['content']
-        elif 'property' in attrs and attrs['property'] == 'og:description':
-            self.og_description = attrs['content']
-        elif 'name' in attrs and attrs['name'] == 'description':
-            self.episode_info = episode_info_from_data(attrs['content'])
+def extractor(url):
+    url = url.replace('/mr/', '/')
+    og_image = ''
+    og_description = ''
+    episode_info = {}
+    response = requests.get(url)
+    if response.status_code == 200:
+        episode_page = BeautifulSoup(response.text, features='html.parser')
+        og_image = episode_page.find('meta', {'property': 'og:image'}).get('content')
+        try:
+            og_description = episode_page.find('meta', {'property': 'og:description'}).get('content')
+        except AttributeError:
+            pass
+        episode_info = episode_info_from_data(episode_page.title.text)
+    return og_image, og_description, episode_info
 
 
 class ParserRSS:
