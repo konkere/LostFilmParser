@@ -278,6 +278,7 @@ class TlgrmBot:
             return True
 
 
-lostfilm = ParserRSS()
-if lostfilm.online() and lostfilm.bot.alive() and lostfilm.clear_entries():
-    lostfilm.send_new_entries()
+if __name__ == '__main__':
+    lostfilm = ParserRSS()
+    if lostfilm.online() and lostfilm.bot.alive() and lostfilm.clear_entries():
+        lostfilm.send_new_entries()
