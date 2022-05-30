@@ -88,7 +88,10 @@ def extractor(url):
     response = requests.get(url)
     if response.status_code == 200:
         episode_page = BeautifulSoup(response.text, features='html.parser')
-        og_image = episode_page.find('meta', {'property': 'og:image'}).get('content')
+        try:
+            og_image = episode_page.find('meta', {'property': 'og:image'}).get('content')
+        except AttributeError:
+            pass
         try:
             og_description = episode_page.find('meta', {'property': 'og:description'}).get('content')
         except AttributeError:
