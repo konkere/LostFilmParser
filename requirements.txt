@@ -4,6 +4,7 @@ chardet==4.0.0
 charset-normalizer==2.0.12
 feedparser==6.0.10
 idna==3.3
+peewee==3.14.10
 pyTelegramBotAPI==4.5.1
 requests==2.27.1
 sgmllib3k==1.0.0

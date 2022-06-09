@@ -3,15 +3,19 @@
 
 import os
 import re
-import json
-import calendar
+import peewee
 import requests
 import feedparser
 import configparser
-from time import gmtime
 from telebot import TeleBot
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+from playhouse.db_url import connect
+from playhouse.shortcuts import model_to_dict
+from datetime import datetime, timedelta, date as dt_date
+
+
+db_proxy = peewee.DatabaseProxy()
 
 
 def poster_from_data(data):
@@ -54,29 +58,22 @@ def generate_caption(entry):
         episode_name = markdownv2_converter(f'{entry["name_ru"]} ({entry["name"]})')
     else:
         episode_name = markdownv2_converter(f'{entry["name"]}')
-    episode_link = entry['link']
-    description_text = entry['description']
-    description = bool(description_text)
-    caption = f'*{show_name}*\n{episode_numbers}:\n[{episode_name}]({episode_link})\n\n{description_text}'
-    return caption, description
+    episode_link = entry['url']
+    if entry['description']:
+        description = 'Описание:\n||' + markdownv2_converter(entry['description']) + '||'
+    else:
+        description = ''
+    caption = f'*{show_name}*\n{episode_numbers}:\n[{episode_name}]({episode_link})\n\n{description}'
+    return caption
 
 
 def parse_data_from_entry(entry):
     entry_link = entry['link']
-    og_image, og_description, episode = extractor(entry_link)
-    entry_timestamp = calendar.timegm(entry['published_parsed'])
-    if og_image:
-        entry_pic_episode = og_image
-    else:
-        entry_pic_episode = poster_from_data(entry['summary'])
-    if og_description:
-        entry_description = 'Описание:\n||' + markdownv2_converter(og_description) + '||'
-    else:
-        entry_description = ''
-    episode['link'] = entry_link
-    episode['description'] = entry_description
-    episode['pic'] = entry_pic_episode
-    episode['timestamp'] = entry_timestamp
+    episode = extractor(entry_link)
+    entry_date = datetime(*entry['published_parsed'][:3]).date()
+    if not episode['poster']:
+        episode['poster'] = poster_from_data(entry['summary'])
+    episode['date'] = entry_date
     return episode
 
 
@@ -84,7 +81,7 @@ def extractor(url):
     url = url.replace('/mr/', '/')
     og_image = ''
     og_description = ''
-    episode_info = {}
+    episode = {}
     response = requests.get(url)
     if response.status_code == 200:
         episode_page = BeautifulSoup(response.text, features='html.parser')
@@ -96,24 +93,44 @@ def extractor(url):
             og_description = episode_page.find('meta', {'property': 'og:description'}).get('content')
         except AttributeError:
             pass
-        episode_info = episode_info_from_data(episode_page.title.text)
-    return og_image, og_description, episode_info
+        episode = episode_info_from_data(episode_page.title.text)
+        episode['poster'] = og_image
+        episode['description'] = og_description
+        episode['url'] = url
+    return episode
+
+
+class BaseModel(peewee.Model):
+    class Meta:
+        database = db_proxy
+
+
+class Episodes(BaseModel):
+    id = peewee.IntegerField()
+    date = peewee.DateTimeField()
+    show_name_ru = peewee.CharField()
+    show_name = peewee.CharField()
+    season_number = peewee.IntegerField()
+    number = peewee.IntegerField()
+    name_ru = peewee.CharField()
+    name = peewee.CharField()
+    description = peewee.TextField()
+    url = peewee.CharField()
+    poster = peewee.CharField()
 
 
 class ParserRSS:
 
     def __init__(self):
-        self.old_entries_delta = (2678400 * 3)  # one month x3
-        self.old_entries_frontier = calendar.timegm(gmtime()) - self.old_entries_delta
+        self.old_entries_frontier = dt_date.today() - timedelta(days=90)
         self.settings = Conf()
-        self.entries_db_file = os.path.join(self.settings.work_dir, 'entries.db')
-        try:
-            self.entries_db = json.load(open(self.entries_db_file))
-        except FileNotFoundError:
-            self.entries_db = {}
+        self.db = connect(self.settings.db_url)
+        self.episodes = Episodes
+        db_proxy.initialize(self.db)
+        self.db.create_tables([self.episodes])
         self.feed = feedparser.parse(self.settings.source_rss)
         self.bot = TlgrmBot(self.settings.botid, self.settings.chatid)
-        self.entries = []
+        self.new_episodes = []
         self.pattern = r'^(.*) \((.*)\). (.*). \(S(\d+)E(\d+)\)'
         self.pattern_sp = r'^(.*) \((.*)\). (.*). \((.*) (\d+)\)'
 
@@ -123,90 +140,68 @@ class ParserRSS:
         else:
             return False
 
-    def update_db(self):
-        with open(self.entries_db_file, 'w', encoding='utf8') as dump_file:
-            json.dump(self.entries_db, dump_file, ensure_ascii=False)
+    def check_old_episodes(self):
+        for episode in self.episodes.select():
+            if episode.date.date() < self.old_entries_frontier:
+                episode.delete_instance()
+            elif not episode.description:
+                self.check_description_update(episode)
 
-    def clear_entries(self):
+    def check_description_update(self, episode):
+        description = extractor(episode.url)['description']
+        if description:
+            episode.description = description
+            episode.date = episode.date.date()
+            episode_as_dict = model_to_dict(episode)
+            caption = generate_caption(episode_as_dict)
+            try:
+                self.bot.edit_caption(episode.id, caption)
+            except Exception:
+                pass
+            else:
+                episode.save()
+
+    def check_new_entries(self):
         for entry in self.feed['entries']:
-            entry_stamp = {}
+            episode = {}
             try:
                 re_entry = re.match(self.pattern, entry['title'])
-                entry_stamp['season_number'] = int(re_entry.group(4))
+                episode['season_number'] = int(re_entry.group(4))
             except AttributeError:
                 re_entry = re.match(self.pattern_sp, entry['title'])
-                entry_stamp['season_number'] = 999
-            entry_stamp['show_name'] = re_entry.group(2)
-            entry_stamp['number'] = int(re_entry.group(5))
-            entry_in_db = self.entry_in_db(entry_stamp)
-            if not entry_in_db:
-                self.new_entry_preparation(entry)
+                episode['season_number'] = 999
+            episode['show_name'] = re_entry.group(2)
+            episode['number'] = int(re_entry.group(5))
+            if not self.episode_in_db(episode):
+                new_episode = parse_data_from_entry(entry)
+                new_episode['id'] = None
+                self.new_episodes.append(new_episode)
+        self.new_episodes.reverse()
+
+    def send_new_episodes(self):
+        for episode in self.new_episodes:
+            poster = episode['poster']
+            caption = generate_caption(episode)
+            try:
+                message_id = self.bot.send_poster_with_caption(poster, caption)
+            except Exception:
+                self.new_episodes.remove(episode)
             else:
-                self.check_update_description(entry, entry_in_db)
-        if self.entries:
-            self.entries.reverse()
-            return True
-        return False
+                episode['id'] = message_id
+        if self.new_episodes:
+            self.episodes.insert_many(self.new_episodes).execute()
 
-    def new_entry_preparation(self, entry):
-        episode = parse_data_from_entry(entry)
-        self.entries.append(episode)
-
-    def send_new_entries(self):
-        for entry in self.entries:
-            pic = entry['pic']
-            caption, description = generate_caption(entry)
-            message_id = self.bot.send(pic, caption)
-            self.add_episode_to_db(entry, message_id, description)
-        self.clear_old_entries()
-        self.update_db()
-
-    def add_episode_to_db(self, entry, message_id, description):
-        episode = {
-            'message_id': message_id,
-            'show_name': entry['show_name'],
-            'season_number': entry['season_number'],
-            'number': entry['number'],
-            'description': description,
-        }
-        timestamp = self.timestamp_uniq(entry['timestamp'])
-        self.entries_db[timestamp] = episode
-
-    def clear_old_entries(self):
-        old_entries = []
-        for timestamp in self.entries_db.keys():
-            if self.old_entries_frontier > int(timestamp):
-                old_entries.append(timestamp)
-        if old_entries:
-            for timestamp in old_entries:
-                del self.entries_db[timestamp]
-
-    def timestamp_uniq(self, timestamp):
-        while True:
-            if str(timestamp) in self.entries_db.keys():
-                timestamp += 1
-            else:
-                return str(timestamp)
-
-    def entry_in_db(self, stamp):
-        for timestamp in self.entries_db.keys():
-            available = (
-                stamp['show_name'] == self.entries_db[timestamp]['show_name'] and
-                stamp['season_number'] == self.entries_db[timestamp]['season_number'] and
-                stamp['number'] == self.entries_db[timestamp]['number']
+    def episode_in_db(self, entry):
+        try:
+            self.episodes.get(
+                self.episodes.show_name == entry['show_name'],
+                self.episodes.season_number == entry['season_number'],
+                self.episodes.number == entry['number'],
             )
-            if available:
-                return timestamp
-        return False
-
-    def check_update_description(self, entry, entry_in_db):
-        episode = parse_data_from_entry(entry)
-        if not self.entries_db[entry_in_db]['description'] and episode['description']:
-            caption, description = generate_caption(episode)
-            message_id = self.entries_db[entry_in_db]['message_id']
-            self.bot.edit(message_id, caption)
-            self.entries_db[entry_in_db]['description'] = description
-            self.update_db()
+        except self.episodes.DoesNotExist:
+            return False
+        else:
+            return True
 
 
 class Conf:
@@ -220,6 +215,7 @@ class Conf:
         self.botid = self.read('Settings', 'botid')
         self.chatid = self.read('Settings', 'chatid')
         self.source_rss = self.read('System', 'source')
+        self.db_url = self.db_url_insert_path(self.read('System', 'db'))
 
     def exist(self):
         if not os.path.isdir(self.work_dir):
@@ -236,6 +232,7 @@ class Conf:
         self.config.set('Settings', 'botid', '000000000:00000000000000000000000000000000000')
         self.config.set('Settings', 'chatid', '00000000000000')
         self.config.set('System', 'source', 'https://www.lostfilmtv5.site/rss.xml')
+        self.config.set('System', 'db', 'sqlite:///entries.db')
         with open(self.config_file, 'w') as config_file:
             self.config.write(config_file)
         raise FileNotFoundError(f'Required to fill data in config (section [Settings]): {self.config_file}')
@@ -243,6 +240,15 @@ class Conf:
     def read(self, section, setting):
         value = self.config.get(section, setting)
         return value
+
+    def db_url_insert_path(self, db_url):
+        pattern = r'(^[A-z]*:\/\/\/)(.*$)'
+        parse = re.match(pattern, db_url)
+        prefix = parse.group(1)
+        db_name = parse.group(2)
+        path = os.path.join(self.work_dir, db_name)
+        db_converted_url = prefix + path
+        return db_converted_url
 
 
 class TlgrmBot:
@@ -252,16 +258,16 @@ class TlgrmBot:
         self.chatid = chatid
         self.bot = TeleBot(self.botid)
 
-    def send(self, pic, caption):
+    def send_poster_with_caption(self, poster, caption):
         message = self.bot.send_photo(
             chat_id=self.chatid,
-            photo=pic,
+            photo=poster,
             caption=caption,
             parse_mode='MarkdownV2',
         )
         return message.message_id
 
-    def edit(self, message_id, caption):
+    def edit_caption(self, message_id, caption):
         self.bot.edit_message_caption(
             caption=caption,
             chat_id=self.chatid,
@@ -280,5 +286,7 @@ class TlgrmBot:
 
 if __name__ == '__main__':
     lostfilm = ParserRSS()
-    if lostfilm.online() and lostfilm.bot.alive() and lostfilm.clear_entries():
-        lostfilm.send_new_entries()
+    if lostfilm.online() and lostfilm.bot.alive():
+        lostfilm.check_old_episodes()
+        lostfilm.check_new_entries()
+        lostfilm.send_new_episodes()
