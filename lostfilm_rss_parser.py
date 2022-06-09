@@ -122,8 +122,8 @@ class Episodes(BaseModel):
 class ParserRSS:
 
     def __init__(self):
-        self.old_entries_frontier = dt_date.today() - timedelta(days=90)
         self.settings = Conf()
+        self.old_entries_frontier = dt_date.today() - timedelta(days=self.settings.db_episode_lifetime)
         self.db = connect(self.settings.db_url)
         self.episodes = Episodes
         db_proxy.initialize(self.db)
@@ -216,6 +216,7 @@ class Conf:
         self.chatid = self.read('Settings', 'chatid')
         self.source_rss = self.read('System', 'source')
         self.db_url = self.db_url_insert_path(self.read('System', 'db'))
+        self.db_episode_lifetime = int(self.read('System', 'lifetime'))
 
     def exist(self):
         if not os.path.isdir(self.work_dir):
@@ -233,6 +234,7 @@ class Conf:
         self.config.set('Settings', 'chatid', '00000000000000')
         self.config.set('System', 'source', 'https://www.lostfilmtv5.site/rss.xml')
         self.config.set('System', 'db', 'sqlite:///entries.db')
+        self.config.set('System', 'lifetime', '90')
         with open(self.config_file, 'w') as config_file:
             self.config.write(config_file)
         raise FileNotFoundError(f'Required to fill data in config (section [Settings]): {self.config_file}')
