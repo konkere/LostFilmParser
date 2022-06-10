@@ -144,13 +144,23 @@ class ParserRSS:
         for episode in self.episodes.select():
             if episode.date.date() < self.old_entries_frontier:
                 episode.delete_instance()
-            elif not episode.description:
-                self.check_description_update(episode)
+            elif not episode.description or not episode.name_ru:
+                self.check_missed_data(episode)
 
-    def check_description_update(self, episode):
-        description = extractor(episode.url)['description']
-        if description:
+    def check_missed_data(self, episode):
+        need_upd = False
+        old_description = episode.description
+        old_name_ru = episode.name_ru
+        episode_new_check = extractor(episode.url)
+        description = episode_new_check['description']
+        name_ru = episode_new_check['name_ru']
+        if description and not old_description:
             episode.description = description
+            need_upd = True
+        if name_ru and not old_name_ru:
+            episode.name_ru = name_ru
+            need_upd = True
+        if need_upd:
             episode.date = episode.date.date()
             episode_as_dict = model_to_dict(episode)
             caption = generate_caption(episode_as_dict)
