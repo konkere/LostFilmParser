@@ -67,6 +67,39 @@ def generate_caption(entry):
     return caption
 
 
+def generate_schedule_text(section, schedule):
+    date = ''
+    episodes = ''
+    float_date = False if section == 'сегодня' or section == 'завтра' else True
+    title = (
+            markdownv2_converter(f'Релизы, запланированные ')
+            + ('на ' * (not float_date))
+            + f'*{section}*'
+            + (markdownv2_converter(f' [{schedule[0]["date"]}]') * (not float_date))
+            + markdownv2_converter('.')
+    )
+    for number, episode in enumerate(schedule, 1):
+        number = markdownv2_converter(f'{number}.')
+        if episode["show_name"] == episode["show_name_ru"]:
+            show_name = markdownv2_converter(f'{episode["show_name"]}:')
+        else:
+            show_name = markdownv2_converter(f'{episode["show_name_ru"]} ({episode["show_name"]}):')
+        episode_numbers = markdownv2_converter(f'S{episode["season_number"]:02}E{episode["number"]:02}')
+        if episode['name_ru']:
+            episode_name = markdownv2_converter(f'{episode["name_ru"]} ({episode["name"]})')
+        else:
+            episode_name = markdownv2_converter(f'{episode["name"]}')
+        episode_link = episode['url']
+        if date == episode['date']:
+            pass
+        else:
+            date = episode['date']
+            episodes += ('*' + markdownv2_converter(f'[{date}]:') + '*\n') * float_date
+        episodes += f'*{number}* {show_name} {episode_numbers} — [{episode_name}]({episode_link})\n'
+    message_text = f'{title}\n\n{episodes}'
+    return message_text
+
+
 def parse_data_from_entry(entry):
     entry_link = entry['link']
     episode = extractor(entry_link)
@@ -119,18 +152,25 @@ class Episodes(BaseModel):
     poster = peewee.CharField()
 
 
-class ParserRSS:
+class Schedule(BaseModel):
+    id = peewee.IntegerField()
+    date = peewee.DateTimeField()
+
+
+class Parser:
 
     def __init__(self):
         self.settings = Conf()
         self.old_entries_frontier = dt_date.today() - timedelta(days=self.settings.db_episode_lifetime)
         self.db = connect(self.settings.db_url)
         self.episodes = Episodes
+        self.schedule = Schedule
         db_proxy.initialize(self.db)
-        self.db.create_tables([self.episodes])
-        self.feed = feedparser.parse(self.settings.source_rss)
+        self.db.create_tables([self.episodes, self.schedule])
+        self.feed = feedparser.parse(self.settings.rss)
         self.bot = TlgrmBot(self.settings.botid, self.settings.chatid)
         self.new_episodes = []
+        self.timetable = {}
         self.pattern = r'^(.*) \((.*)\). (.*). \(S(\d+)E(\d+)\)'
         self.pattern_sp = r'^(.*) \((.*)\). (.*). \((.*) (\d+)\)'
 
@@ -213,6 +253,80 @@ class ParserRSS:
         else:
             return True
 
+    def scheduler(self):
+        try:
+            self.schedule.select().where(self.schedule.date == dt_date.today()).get()
+        except self.schedule.DoesNotExist:
+            response = requests.get(self.settings.schedule)
+            if response.status_code == 200:
+                self.schedule_parse(response)
+                self.send_schedules()
+        for entry in self.schedule.select():
+            if entry.date.date() < self.old_entries_frontier:
+                entry.delete_instance()
+
+    def schedule_parse(self, response):
+        divide = ''
+        schedule = BeautifulSoup(response.text, features='html.parser')
+        schedule_lines = schedule.findAll('tr')
+        for line in schedule_lines:
+            try:
+                divide = line.find('th', {'colspan': 6}).text
+                self.timetable[divide] = []
+            except AttributeError:
+                episode = self.schedule_episode(line)
+                self.timetable[divide].append(episode)
+
+    def schedule_episode(self, episode):
+        pattern_senn = r'^(\d{1,3})[ ]сезон[ ](\d{1,3})[ ]серия$'
+        pattern_url = r"^goTo\('(\/series\/.*)',false\);$"
+        pattern_date = r'\d{2}.\d{2}.\d{4}'
+        column_alpha = episode.find('td', {'class': 'alpha'})
+        column_beta = episode.find('td', {'class': 'beta'})
+        column_gamma = episode.find('td', {'class': 'gamma'})
+        column_delta = episode.find('td', {'class': 'delta'})
+        show_name = column_alpha.find('div', {'class': 'en small-text'}).text
+        show_name_ru = column_alpha.find('div', {'class': 'ru'}).text
+        season_episode = column_beta.find('div', {'class': 'count'}).text
+        season_episode = re.match(pattern_senn, season_episode)
+        season_number, number = season_episode.group(1, 2)
+        re_url = re.match(pattern_url, column_beta.get('onclick'))
+        ep_url = urljoin(self.settings.source, re_url[1])
+        [name, _, name_ru] = [x.text for x in column_gamma]
+        if name_ru:
+            name, name_ru = name_ru, name
+        ep_date = re.findall(pattern_date, column_delta.text)[0]
+        episode = {
+            'show_name': show_name,
+            'show_name_ru': show_name_ru,
+            'season_number': int(season_number),
+            'number': int(number),
+            'name': name,
+            'name_ru': name_ru,
+            'url': ep_url,
+            'date': ep_date,
+        }
+        return episode
+
+    def send_schedules(self):
+        id_s = []
+        sections = [
+            'сегодня',
+            'завтра',
+            'на этой неделе',
+            'на следующей неделе',
+            'позже',
+        ]
+        if self.timetable:
+            for section in sections:
+                message_text = generate_schedule_text(section, self.timetable[section])
+                message_id = self.bot.send_text_message(message_text)
+                id_s.append(message_id)
+            self.schedule.create(
+                id=id_s[0],
+                date=dt_date.today(),
+            )
+
 
 class Conf:
 
@@ -224,7 +338,9 @@ class Conf:
         self.config.read(self.config_file)
         self.botid = self.read('Settings', 'botid')
         self.chatid = self.read('Settings', 'chatid')
-        self.source_rss = self.read('System', 'source')
+        self.source = self.read('System', 'source')
+        self.rss = urljoin(self.source, 'rss.xml')
+        self.schedule = urljoin(self.source, 'schedule')
         self.db_url = self.db_url_insert_path(self.read('System', 'db'))
         self.db_episode_lifetime = int(self.read('System', 'lifetime'))
 
@@ -242,7 +358,7 @@ class Conf:
         self.config.add_section('System')
         self.config.set('Settings', 'botid', '000000000:00000000000000000000000000000000000')
         self.config.set('Settings', 'chatid', '00000000000000')
-        self.config.set('System', 'source', 'https://www.lostfilmtv5.site/rss.xml')
+        self.config.set('System', 'source', 'https://www.lostfilmtv5.site')
         self.config.set('System', 'db', 'sqlite:///entries.db')
         self.config.set('System', 'lifetime', '90')
         with open(self.config_file, 'w') as config_file:
@@ -287,6 +403,15 @@ class TlgrmBot:
             parse_mode='MarkdownV2'
         )
 
+    def send_text_message(self, text):
+        message = self.bot.send_message(
+            chat_id=self.chatid,
+            text=text,
+            parse_mode='MarkdownV2',
+            disable_web_page_preview=True,
+        )
+        return message.message_id
+
     def alive(self):
         try:
             self.bot.get_me()
@@ -297,8 +422,9 @@ class TlgrmBot:
 
 
 if __name__ == '__main__':
-    lostfilm = ParserRSS()
+    lostfilm = Parser()
     if lostfilm.online() and lostfilm.bot.alive():
+        lostfilm.scheduler()
         lostfilm.check_old_episodes()
         lostfilm.check_new_entries()
         lostfilm.send_new_episodes()
