@@ -259,23 +259,27 @@ class Parser:
         except self.schedule.DoesNotExist:
             response = requests.get(self.settings.schedule)
             if response.status_code == 200:
-                self.schedule_parse(response)
-                self.send_schedules()
+                sections = self.schedule_parse(response)
+                self.send_schedules(sections)
         for entry in self.schedule.select():
             if entry.date.date() < self.old_entries_frontier:
                 entry.delete_instance()
 
     def schedule_parse(self, response):
         divide = ''
+        sections = []
         schedule = BeautifulSoup(response.text, features='html.parser')
         schedule_lines = schedule.findAll('tr')
         for line in schedule_lines:
             try:
                 divide = line.find('th', {'colspan': 6}).text
-                self.timetable[divide] = []
             except AttributeError:
                 episode = self.schedule_episode(line)
                 self.timetable[divide].append(episode)
+            else:
+                self.timetable[divide] = []
+                sections.append(divide)
+        return sections
 
     def schedule_episode(self, episode):
         pattern_senn = r'^(\d{1,3})[ ]сезон[ ](\d{1,3})[ ]серия$'
@@ -308,15 +312,8 @@ class Parser:
         }
         return episode
 
-    def send_schedules(self):
+    def send_schedules(self, sections):
         id_s = []
-        sections = [
-            'сегодня',
-            'завтра',
-            'на этой неделе',
-            'на следующей неделе',
-            'позже',
-        ]
         if self.timetable:
             for section in sections:
                 message_text = generate_schedule_text(section, self.timetable[section])
