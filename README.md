@@ -1,4 +1,4 @@
-# LostfilmRSS
+# LostFilmParser
 
 Script for parse RSS (also episodes and schedule pages :wink:) from LostFilm web-site and send new entries and planned releases to Telegram.
 
