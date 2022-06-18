@@ -1,6 +1,6 @@
 # LostfilmRSS
 
-Script for parse RSS (and pages of episodes :wink:) from LostFilm web-site and send new entries to Telegram.
+Script for parse RSS (also episodes and schedule pages :wink:) from LostFilm web-site and send new entries and planned releases to Telegram.
 
 Python 3.9 required.
 
