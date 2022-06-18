@@ -328,7 +328,7 @@ class Parser:
 class Conf:
 
     def __init__(self):
-        self.work_dir = os.path.join(os.getenv('HOME'), '.LostFilmRSS')
+        self.work_dir = os.path.join(os.getenv('HOME'), '.LostFilmParser')
         self.config_file = os.path.join(self.work_dir, 'settings.conf')
         self.config = configparser.ConfigParser()
         self.exist()
