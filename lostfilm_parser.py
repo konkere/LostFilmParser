@@ -54,10 +54,10 @@ def generate_caption(entry):
         episode_numbers = markdownv2_converter(f'Спецэпизод {entry["number"]}')
     else:
         episode_numbers = markdownv2_converter(f'{entry["season_number"]} сезон, {entry["number"]} эпизод')
-    if entry["name_ru"]:
-        episode_name = markdownv2_converter(f'{entry["name_ru"]} ({entry["name"]})')
-    else:
+    if not entry['name_ru'] or entry['name_ru'] == entry['name']:
         episode_name = markdownv2_converter(f'{entry["name"]}')
+    else:
+        episode_name = markdownv2_converter(f'{entry["name_ru"]} ({entry["name"]})')
     episode_link = entry['url']
     if entry['description']:
         description = 'Описание:\n||' + markdownv2_converter(entry['description']) + '||'
@@ -84,11 +84,14 @@ def generate_schedule_text(section, schedule):
             show_name = markdownv2_converter(f'{episode["show_name"]}:')
         else:
             show_name = markdownv2_converter(f'{episode["show_name_ru"]} ({episode["show_name"]}):')
-        episode_numbers = markdownv2_converter(f'S{episode["season_number"]:02}E{episode["number"]:02}')
-        if episode['name_ru']:
-            episode_name = markdownv2_converter(f'{episode["name_ru"]} ({episode["name"]})')
+        if episode['season_number'] == 999:
+            episode_numbers = markdownv2_converter(f'SpE{episode["number"]:02}')
         else:
+            episode_numbers = markdownv2_converter(f'S{episode["season_number"]:02}E{episode["number"]:02}')
+        if not episode['name_ru'] or episode['name_ru'] == episode['name']:
             episode_name = markdownv2_converter(f'{episode["name"]}')
+        else:
+            episode_name = markdownv2_converter(f'{episode["name_ru"]} ({episode["name"]})')
         episode_link = episode['url']
         if date == episode['date']:
             pass
@@ -283,6 +286,7 @@ class Parser:
 
     def schedule_episode(self, episode):
         pattern_senn = r'^(\d{1,3})[ ]сезон[ ](\d{1,3})[ ]серия$'
+        pattern_special = r'^Спецэпизод[ ](\d{1,3})$'
         pattern_url = r"^goTo\('(\/series\/.*)',false\);$"
         pattern_date = r'\d{2}.\d{2}.\d{4}'
         column_alpha = episode.find('td', {'class': 'alpha'})
@@ -292,8 +296,13 @@ class Parser:
         show_name = column_alpha.find('div', {'class': 'en small-text'}).text
         show_name_ru = column_alpha.find('div', {'class': 'ru'}).text
         season_episode = column_beta.find('div', {'class': 'count'}).text
-        season_episode = re.match(pattern_senn, season_episode)
-        season_number, number = season_episode.group(1, 2)
+        try:
+            re_season_episode = re.match(pattern_senn, season_episode)
+            season_number, number = re_season_episode.group(1, 2)
+        except AttributeError:
+            re_season_episode = re.match(pattern_special, season_episode)
+            season_number = 999
+            number = re_season_episode.group(1)
         re_url = re.match(pattern_url, column_beta.get('onclick'))
         ep_url = urljoin(self.settings.source, re_url[1])
         [name, _, name_ru] = [x.text for x in column_gamma]
