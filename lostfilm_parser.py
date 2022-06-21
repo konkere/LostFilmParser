@@ -3,14 +3,17 @@
 
 import os
 import re
+import cv2
+import numpy
 import peewee
 import requests
-import feedparser
-import configparser
 from telebot import TeleBot
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+from urllib.request import urlopen
 from playhouse.db_url import connect
+from configparser import ConfigParser
+from feedparser import parse as feed_parse
 from playhouse.shortcuts import model_to_dict
 from datetime import datetime, timedelta, date as dt_date
 
@@ -21,6 +24,7 @@ db_proxy = peewee.DatabaseProxy()
 def poster_from_data(data):
     poster = data[data.find('http'):]
     poster = poster[:poster.find('image.jpg')]
+    poster = poster[:poster.find('icon.jpg')]
     poster = urljoin(poster, 'poster.jpg')
     return poster
 
@@ -45,7 +49,7 @@ def markdownv2_converter(text):
     return text
 
 
-def generate_caption(entry):
+def generate_episode_caption(entry):
     if entry["show_name"] == entry["show_name_ru"]:
         show_name = markdownv2_converter(f'{entry["show_name"]}')
     else:
@@ -67,7 +71,7 @@ def generate_caption(entry):
     return caption
 
 
-def generate_schedule_text(section, schedule):
+def generate_schedule_caption(section, schedule):
     date = ''
     episodes = ''
     float_date = False if section == 'сегодня' or section == 'завтра' else True
@@ -101,6 +105,49 @@ def generate_schedule_text(section, schedule):
         episodes += f'*{number}* {show_name} {episode_numbers} — [{episode_name}]({episode_link})\n'
     message_text = f'{title}\n\n{episodes}'
     return message_text
+
+
+def generate_schedule_collage(blank_logo_url, posters_url):
+    posters = []
+    blank_logo = convert_url2pic(blank_logo_url)
+    for url in posters_url:
+        poster = convert_url2pic(url)
+        posters.append(poster)
+    posters_count = len(posters)
+    columns = round_up(posters_count ** .5)
+    lines = round_up(posters_count / columns)
+    blanks = columns * lines - posters_count
+    for _ in range(blanks):
+        posters.append(blank_logo)
+    horizontal = []
+    vertical = []
+    poster = 0
+    for line in range(lines):
+        for column in range(columns):
+            horizontal.append(posters[poster])
+            poster += 1
+        stack_horizontal = numpy.hstack(horizontal)
+        vertical.append(stack_horizontal)
+        horizontal = []
+    numpy_collage = numpy.vstack(vertical)
+    is_success, buffer = cv2.imencode(".jpg", numpy_collage)
+    collage = buffer.tobytes()
+    return collage
+
+
+def round_up(num):
+    num = num * (-1)
+    num = num // 1
+    num = num * (-1)
+    return int(num)
+
+
+def convert_url2pic(url, size=(715, 330)):
+    open_url = urlopen(url)
+    pic = numpy.asarray(bytearray(open_url.read()), dtype='uint8')
+    pic = cv2.imdecode(pic, cv2.IMREAD_COLOR)
+    pic = cv2.resize(pic, size)
+    return pic
 
 
 def parse_data_from_entry(entry):
@@ -170,7 +217,7 @@ class Parser:
         self.schedule = Schedule
         db_proxy.initialize(self.db)
         self.db.create_tables([self.episodes, self.schedule])
-        self.feed = feedparser.parse(self.settings.rss)
+        self.feed = feed_parse(self.settings.rss)
         self.bot = TlgrmBot(self.settings.botid, self.settings.chatid)
         self.new_episodes = []
         self.timetable = {}
@@ -206,7 +253,7 @@ class Parser:
         if need_upd:
             episode.date = episode.date.date()
             episode_as_dict = model_to_dict(episode)
-            caption = generate_caption(episode_as_dict)
+            caption = generate_episode_caption(episode_as_dict)
             try:
                 self.bot.edit_caption(episode.id, caption)
             except Exception:
@@ -234,7 +281,7 @@ class Parser:
     def send_new_episodes(self):
         for episode in self.new_episodes:
             poster = episode['poster']
-            caption = generate_caption(episode)
+            caption = generate_episode_caption(episode)
             try:
                 message_id = self.bot.send_poster_with_caption(poster, caption)
             except Exception:
@@ -262,8 +309,8 @@ class Parser:
         except self.schedule.DoesNotExist:
             response = requests.get(self.settings.schedule)
             if response.status_code == 200:
-                sections = self.schedule_parse(response)
-                self.send_schedules(sections)
+                sections, blank_logo = self.schedule_parse(response)
+                self.send_schedules(sections, blank_logo)
         for entry in self.schedule.select():
             if entry.date.date() < self.old_entries_frontier:
                 entry.delete_instance()
@@ -272,6 +319,7 @@ class Parser:
         divide = ''
         sections = []
         schedule = BeautifulSoup(response.text, features='html.parser')
+        blank_logo = schedule.find('meta', property='og:image').get('content')
         schedule_lines = schedule.findAll('tr')
         for line in schedule_lines:
             try:
@@ -282,7 +330,7 @@ class Parser:
             else:
                 self.timetable[divide] = []
                 sections.append(divide)
-        return sections
+        return sections, blank_logo
 
     def schedule_episode(self, episode):
         pattern_senn = r'^(\d{1,3})[ ]сезон[ ](\d{1,3})[ ]серия$'
@@ -293,6 +341,7 @@ class Parser:
         column_beta = episode.find('td', {'class': 'beta'})
         column_gamma = episode.find('td', {'class': 'gamma'})
         column_delta = episode.find('td', {'class': 'delta'})
+        poster = poster_from_data(urljoin('http:', column_alpha.find('img').get('src')))
         show_name = column_alpha.find('div', {'class': 'en small-text'}).text
         show_name_ru = column_alpha.find('div', {'class': 'ru'}).text
         season_episode = column_beta.find('div', {'class': 'count'}).text
@@ -317,16 +366,21 @@ class Parser:
             'name': name,
             'name_ru': name_ru,
             'url': ep_url,
+            'poster': poster,
             'date': ep_date,
         }
         return episode
 
-    def send_schedules(self, sections):
+    def send_schedules(self, sections, blank_logo):
         id_s = []
         if self.timetable:
             for section in sections:
-                message_text = generate_schedule_text(section, self.timetable[section])
-                message_id = self.bot.send_text_message(message_text)
+                posters = []
+                for episode in self.timetable[section]:
+                    posters.append(episode['poster'])
+                collage = generate_schedule_collage(blank_logo, posters)
+                caption = generate_schedule_caption(section, self.timetable[section])
+                message_id = self.bot.send_poster_with_caption(collage, caption)
                 id_s.append(message_id)
             self.schedule.create(
                 id=id_s[0],
@@ -339,7 +393,7 @@ class Conf:
     def __init__(self):
         self.work_dir = os.path.join(os.getenv('HOME'), '.LostFilmParser')
         self.config_file = os.path.join(self.work_dir, 'settings.conf')
-        self.config = configparser.ConfigParser()
+        self.config = ConfigParser()
         self.exist()
         self.config.read(self.config_file)
         self.botid = self.read('Settings', 'botid')
