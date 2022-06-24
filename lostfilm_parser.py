@@ -114,7 +114,7 @@ def generate_schedule_collage(blank_logo_url, posters_url):
         poster = convert_url2pic(url)
         posters.append(poster)
     posters_count = len(posters)
-    columns = round_up(posters_count ** .5)
+    columns = round(posters_count ** .5)
     lines = round_up(posters_count / columns)
     blanks = columns * lines - posters_count
     for _ in range(blanks):
