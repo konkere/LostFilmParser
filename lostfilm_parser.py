@@ -14,6 +14,7 @@ from urllib.parse import urljoin
 from urllib.request import urlopen
 from playhouse.db_url import connect
 from configparser import ConfigParser
+from telebot.types import InputMediaPhoto
 from feedparser import parse as feed_parse
 from playhouse.shortcuts import model_to_dict
 from datetime import datetime, timedelta, date as dt_date
@@ -242,21 +243,27 @@ class Parser:
         for episode in self.episodes.select():
             if episode.date.date() < self.old_entries_frontier:
                 episode.delete_instance()
-            elif not episode.description or not episode.name_ru:
+            elif not episode.description or not episode.name_ru or 'poster.jpg' in episode.poster:
                 self.check_missed_data(episode)
 
     def check_missed_data(self, episode):
         need_upd = False
         old_description = episode.description
         old_name_ru = episode.name_ru
+        old_poster = episode.poster
         episode_new_check = extractor(episode.url)
         description = episode_new_check['description']
         name_ru = episode_new_check['name_ru']
+        poster = episode_new_check['poster']
         if description and not old_description:
             episode.description = description
             need_upd = True
         if name_ru and not old_name_ru:
             episode.name_ru = name_ru
+            need_upd = True
+        if poster != old_poster:
+            self.bot.edit_poster(episode.id, poster)
+            episode.poster = poster
             need_upd = True
         if need_upd:
             episode.date = episode.date.date()
@@ -482,6 +489,13 @@ class TlgrmBot:
             disable_web_page_preview=True,
         )
         return message.message_id
+
+    def edit_poster(self, message_id, poster):
+        self.bot.edit_message_media(
+            chat_id=self.chatid,
+            message_id=message_id,
+            media=InputMediaPhoto(poster),
+        )
 
     def alive(self):
         try:
