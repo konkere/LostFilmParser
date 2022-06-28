@@ -7,6 +7,7 @@ import cv2
 import numpy
 import peewee
 import requests
+from hashlib import sha1
 from telebot import TeleBot
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
@@ -142,6 +143,12 @@ def round_up(num):
     return int(num)
 
 
+def fingerprint(data):
+    hash_data = sha1(data.encode('utf8'))
+    hexdigest_hash_data = hash_data.hexdigest()
+    return hexdigest_hash_data
+
+
 def convert_url2pic(url, size=(715, 330)):
     open_url = urlopen(url)
     pic = numpy.asarray(bytearray(open_url.read()), dtype='uint8')
@@ -205,6 +212,7 @@ class Episodes(BaseModel):
 class Schedule(BaseModel):
     id = peewee.IntegerField()
     date = peewee.DateTimeField()
+    fingerprint = peewee.IntegerField()
 
 
 class Parser:
@@ -372,20 +380,23 @@ class Parser:
         return episode
 
     def send_schedules(self, sections, blank_logo):
-        id_s = []
         if self.timetable:
             for section in sections:
-                posters = []
-                for episode in self.timetable[section]:
-                    posters.append(episode['poster'])
-                collage = generate_schedule_collage(blank_logo, posters)
                 caption = generate_schedule_caption(section, self.timetable[section])
-                message_id = self.bot.send_poster_with_caption(collage, caption)
-                id_s.append(message_id)
-            self.schedule.create(
-                id=id_s[0],
-                date=dt_date.today(),
-            )
+                caption_fingerprint = fingerprint(caption)
+                try:
+                    self.schedule.get(self.schedule.fingerprint == caption_fingerprint)
+                except self.schedule.DoesNotExist:
+                    posters = []
+                    for episode in self.timetable[section]:
+                        posters.append(episode['poster'])
+                    collage = generate_schedule_collage(blank_logo, posters)
+                    message_id = self.bot.send_poster_with_caption(collage, caption)
+                    self.schedule.create(
+                        id=message_id,
+                        date=dt_date.today(),
+                        fingerprint=caption_fingerprint
+                    )
 
 
 class Conf:

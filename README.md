@@ -6,4 +6,4 @@ Python 3.9 required.
 
 Channel with this bot: https://t.me/LostFilmShows
 
-After first run: fill data in config → $HOME/.LostFilmRSS/settings.conf (required in section [Settings] and optional in section [System]).
+After first run: fill data in config → $HOME/.LostFilmParser/settings.conf (required in section [Settings] and optional in section [System]).
