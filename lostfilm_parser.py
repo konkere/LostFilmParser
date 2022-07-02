@@ -14,10 +14,10 @@ from urllib.parse import urljoin
 from urllib.request import urlopen
 from playhouse.db_url import connect
 from configparser import ConfigParser
+from datetime import datetime, timedelta
 from telebot.types import InputMediaPhoto
 from feedparser import parse as feed_parse
 from playhouse.shortcuts import model_to_dict
-from datetime import datetime, timedelta, date as dt_date
 
 
 db_proxy = peewee.DatabaseProxy()
@@ -220,7 +220,8 @@ class Parser:
 
     def __init__(self):
         self.settings = Conf()
-        self.old_entries_frontier = dt_date.today() - timedelta(days=self.settings.db_episode_lifetime)
+        self.today_utc = datetime.utcnow().date()
+        self.old_entries_frontier = self.today_utc - timedelta(days=self.settings.db_episode_lifetime)
         self.db = connect(self.settings.db_url)
         self.episodes = Episodes
         self.schedule = Schedule
@@ -320,7 +321,7 @@ class Parser:
 
     def scheduler(self):
         try:
-            self.schedule.select().where(self.schedule.date == dt_date.today()).get()
+            self.schedule.select().where(self.schedule.date == self.today_utc).get()
         except self.schedule.DoesNotExist:
             response = requests.get(self.settings.schedule)
             if response.status_code == 200:
@@ -401,7 +402,7 @@ class Parser:
                     message_id = self.bot.send_poster_with_caption(collage, caption)
                     self.schedule.create(
                         id=message_id,
-                        date=dt_date.today(),
+                        date=self.today_utc,
                         fingerprint=caption_fingerprint
                     )
 
