@@ -1,0 +1,8 @@
+[Settings]
+botid = 000000000:00000000000000000000000000000000000
+chatid = 00000000000000
+
+[System]
+source = https://www.lostfilmtv5.site
+db = sqlite:///entries.db
+lifetime = 90
