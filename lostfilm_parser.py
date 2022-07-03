@@ -145,6 +145,7 @@ def round_up(num):
 
 
 def fingerprint(data):
+    data = data.lower()
     hash_data = sha1(data.encode('utf8'))
     hexdigest_hash_data = hash_data.hexdigest()
     return hexdigest_hash_data
