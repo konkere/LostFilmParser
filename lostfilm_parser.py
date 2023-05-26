@@ -33,15 +33,23 @@ def poster_from_data(data):
 
 def episode_info_from_data(data):
     episode_info = {}
-    pattern = r'^(.*) \((.*)\). (\d+) сезон (\d+) серия, (.*?[.]*?) \((.*)\): кадры.*$'
-    re_episode_info = re.match(pattern, data)
-    episode_info['show_name_ru'] = re_episode_info.group(1)
-    episode_info['show_name'] = re_episode_info.group(2)
-    episode_info['season_number'] = int(re_episode_info.group(3))
-    episode_info['number'] = int(re_episode_info.group(4))
-    episode_info['name_ru'] = re_episode_info.group(5)
-    episode_info['name'] = re_episode_info.group(6)
-    return episode_info
+    movie_info = {}
+    pattern_episode = r'^(.*) \((.*)\). (\d+) сезон (\d+) серия, (.*?[.]*?) \((.*)\): кадры.*$'
+    pattern_movie = r'^(.*) \((.*)\): кадры.*$'
+    re_episode_info = re.match(pattern_episode, data)
+    if re_episode_info:
+        episode_info['show_name_ru'] = re_episode_info.group(1)
+        episode_info['show_name'] = re_episode_info.group(2)
+        episode_info['season_number'] = int(re_episode_info.group(3))
+        episode_info['number'] = int(re_episode_info.group(4))
+        episode_info['name_ru'] = re_episode_info.group(5)
+        episode_info['name'] = re_episode_info.group(6)
+        return episode_info
+    else:
+        re_movie_info = re.match(pattern_movie, data)
+        movie_info['name_ru'] = re_movie_info.group(1)
+        movie_info['name'] = re_movie_info.group(2)
+        return movie_info
 
 
 def markdownv2_converter(text):
@@ -73,6 +81,24 @@ def generate_episode_caption(entry):
     return caption
 
 
+def generate_movie_caption(entry):
+    if entry['name'] == entry['name_ru']:
+        name = f'{entry["name"]}'
+    else:
+        name = f'{entry["name_ru"]} ({entry["name"]})'
+    movie_link = entry['url']
+    description = ''
+    if entry['description']:
+        description_crop = ''
+        crop = 1024 - len(name) - 15
+        if crop != len(entry['description']):
+            description_crop = entry['description']
+            description_crop = description_crop[:crop - 3] + '(...)'
+        description = 'Описание:\n||' + markdownv2_converter(description_crop) + '||'
+    caption = f'*[{markdownv2_converter(name)}]({movie_link})*\n\n{description}'
+    return caption
+
+
 def generate_schedule_caption(section, schedule):
     date = ''
     episodes = ''
@@ -86,25 +112,42 @@ def generate_schedule_caption(section, schedule):
     )
     for number, episode in enumerate(schedule, 1):
         number = markdownv2_converter(f'{number}.')
-        if episode["show_name"] == episode["show_name_ru"]:
-            show_name = markdownv2_converter(f'{episode["show_name"]}:')
+        try:
+            is_show = bool(episode["show_name"])
+        except KeyError:
+            is_show = False
+        if is_show:
+            if episode["show_name"] == episode["show_name_ru"]:
+                show_name = markdownv2_converter(f'{episode["show_name"]}:')
+            else:
+                show_name = markdownv2_converter(f'{episode["show_name_ru"]} ({episode["show_name"]}):')
+            if episode['season_number'] == 999:
+                episode_numbers = markdownv2_converter(f'SpE{episode["number"]:02}')
+            else:
+                episode_numbers = markdownv2_converter(f'S{episode["season_number"]:02}E{episode["number"]:02}')
+            if not episode['name_ru'] or episode['name_ru'] == episode['name']:
+                episode_name = markdownv2_converter(f'{episode["name"]}')
+            else:
+                episode_name = markdownv2_converter(f'{episode["name_ru"]} ({episode["name"]})')
+            episode_link = episode['url']
+            if date == episode['date']:
+                pass
+            else:
+                date = episode['date']
+                episodes += ('*' + markdownv2_converter(f'[{date}]:') + '*\n') * float_date
+            episodes += f'*{number}* {show_name} {episode_numbers} — [{episode_name}]({episode_link})\n'
         else:
-            show_name = markdownv2_converter(f'{episode["show_name_ru"]} ({episode["show_name"]}):')
-        if episode['season_number'] == 999:
-            episode_numbers = markdownv2_converter(f'SpE{episode["number"]:02}')
-        else:
-            episode_numbers = markdownv2_converter(f'S{episode["season_number"]:02}E{episode["number"]:02}')
-        if not episode['name_ru'] or episode['name_ru'] == episode['name']:
-            episode_name = markdownv2_converter(f'{episode["name"]}')
-        else:
-            episode_name = markdownv2_converter(f'{episode["name_ru"]} ({episode["name"]})')
-        episode_link = episode['url']
-        if date == episode['date']:
-            pass
-        else:
-            date = episode['date']
-            episodes += ('*' + markdownv2_converter(f'[{date}]:') + '*\n') * float_date
-        episodes += f'*{number}* {show_name} {episode_numbers} — [{episode_name}]({episode_link})\n'
+            if not episode['name_ru'] or episode['name_ru'] == episode['name']:
+                episode_name = markdownv2_converter(f'{episode["name"]}')
+            else:
+                episode_name = markdownv2_converter(f'{episode["name_ru"]} ({episode["name"]})')
+            episode_link = episode['url']
+            if date == episode['date']:
+                pass
+            else:
+                date = episode['date']
+                episodes += ('*' + markdownv2_converter(f'[{date}]:') + '*\n') * float_date
+            episodes += f'*{number}* [{episode_name}]({episode_link})\n'
     message_text = f'{title}\n\n{episodes}'
     return message_text
 
@@ -187,7 +230,7 @@ def extractor(url):
             pass
         episode = episode_info_from_data(episode_page.title.text)
         episode['poster'] = og_image
-        episode['description'] = og_description
+        episode['description'] = og_description.replace('&nbsp;', '')
         episode['url'] = url
     return episode
 
@@ -211,6 +254,16 @@ class Episodes(BaseModel):
     poster = peewee.CharField()
 
 
+class Movies(BaseModel):
+    id = peewee.IntegerField()
+    date = peewee.DateTimeField()
+    name_ru = peewee.CharField()
+    name = peewee.CharField()
+    description = peewee.TextField()
+    url = peewee.CharField()
+    poster = peewee.CharField()
+
+
 class Schedule(BaseModel):
     id = peewee.IntegerField()
     date = peewee.DateTimeField()
@@ -225,15 +278,17 @@ class Parser:
         self.old_entries_frontier = self.today_utc - timedelta(days=self.settings.db_episode_lifetime)
         self.db = connect(self.settings.db_url)
         self.episodes = Episodes
+        self.movies = Movies
         self.schedule = Schedule
         db_proxy.initialize(self.db)
-        self.db.create_tables([self.episodes, self.schedule])
+        self.db.create_tables([self.episodes, self.movies, self.schedule])
         self.feed = feed_parse(self.settings.rss)
         self.bot = TlgrmBot(self.settings.botid, self.settings.chatid)
         self.new_episodes = []
         self.timetable = {}
         self.pattern = r'^(.*) \((.*)\). (.*). \(S(\d+)E(\d+)\)'
         self.pattern_sp = r'^(.*) \((.*)\). (.*). \((.*) (\d+)\)'
+        self.pattern_movie = r'^(.*) \((.*)\). \(Фильм\)$'
 
     def online(self):
         if self.feed['status'] == 200:
@@ -247,6 +302,12 @@ class Parser:
                 episode.delete_instance()
             elif not episode.description or not episode.name_ru or 'poster.jpg' in episode.poster:
                 self.check_missed_data(episode)
+        for movie in self.movies.select():
+            if movie.date.date() < self.old_entries_frontier:
+                movie.delete_instance()
+        for schedule in self.schedule.select():
+            if schedule.date.date() < self.old_entries_frontier:
+                schedule.delete_instance()
 
     def check_missed_data(self, episode):
         need_upd = False
@@ -280,25 +341,44 @@ class Parser:
 
     def check_new_entries(self):
         for entry in self.feed['entries']:
-            episode = {}
-            try:
-                re_entry = re.match(self.pattern, entry['title'])
-                episode['season_number'] = int(re_entry.group(4))
-            except AttributeError:
-                re_entry = re.match(self.pattern_sp, entry['title'])
-                episode['season_number'] = 999
-            episode['show_name'] = re_entry.group(2)
-            episode['number'] = int(re_entry.group(5))
-            if not self.episode_in_db(episode):
-                new_episode = parse_data_from_entry(entry)
-                new_episode['id'] = None
-                self.new_episodes.append(new_episode)
+            is_show = True
+            if ' (Фильм)' in entry['title']:
+                elem = self.parse_entry_movie(entry)
+                is_show = False
+            else:
+                elem = self.parse_entry_episode(entry)
+            if not self.episode_in_db(elem, is_show):
+                new_elem = parse_data_from_entry(entry)
+                new_elem['id'] = None
+                new_elem['is_show'] = is_show
+                self.new_episodes.append(new_elem)
         self.new_episodes.reverse()
+
+    def parse_entry_episode(self, entry):
+        episode = {}
+        try:
+            re_entry = re.match(self.pattern, entry['title'])
+            episode['season_number'] = int(re_entry.group(4))
+        except AttributeError:
+            re_entry = re.match(self.pattern_sp, entry['title'])
+            episode['season_number'] = 999
+        episode['show_name'] = re_entry.group(2)
+        episode['number'] = int(re_entry.group(5))
+        return episode
+
+    def parse_entry_movie(self, entry):
+        movie = {}
+        re_entry = re.match(self.pattern_movie, entry['title'])
+        movie['name'] = re_entry.group(2)
+        return movie
 
     def send_new_episodes(self):
         for episode in self.new_episodes:
             poster = episode['poster']
-            caption = generate_episode_caption(episode)
+            if episode['is_show']:
+                caption = generate_episode_caption(episode)
+            else:
+                caption = generate_movie_caption(episode)
             try:
                 message_id = self.bot.send_poster_with_caption(poster, caption)
             except Exception:
@@ -306,25 +386,44 @@ class Parser:
             else:
                 episode['id'] = message_id
         if self.new_episodes:
-            self.episodes.insert_many(self.new_episodes).execute()
+            new_episodes = []
+            new_movies = []
+            for elem in self.new_episodes:
+                if elem['is_show']:
+                    del elem['is_show']
+                    new_episodes.append(elem)
+                else:
+                    del elem['is_show']
+                    new_movies.append(elem)
+            self.episodes.insert_many(new_episodes).execute()
+            self.movies.insert_many(new_movies).execute()
 
-    def episode_in_db(self, entry):
-        try:
-            self.episodes.get(
-                self.episodes.show_name == entry['show_name'],
-                self.episodes.season_number == entry['season_number'],
-                self.episodes.number == entry['number'],
-            )
-        except self.episodes.DoesNotExist:
-            return False
+    def episode_in_db(self, entry, is_show):
+        if is_show:
+            try:
+                self.episodes.get(
+                    self.episodes.show_name == entry['show_name'],
+                    self.episodes.season_number == entry['season_number'],
+                    self.episodes.number == entry['number'],
+                )
+            except self.episodes.DoesNotExist:
+                return False
+            else:
+                return True
         else:
-            return True
+            try:
+                self.movies.get(self.movies.name == entry['name'])
+            except self.movies.DoesNotExist:
+                return False
+            else:
+                return True
 
     def scheduler(self):
         try:
             self.schedule.select().where(self.schedule.date == self.today_utc).get()
         except self.schedule.DoesNotExist:
             response = requests.get(self.settings.schedule)
+            response.encoding = 'utf-8'
             if response.status_code == 200:
                 sections, blank_logo = self.schedule_parse(response)
                 self.send_schedules(sections, blank_logo)
@@ -350,42 +449,67 @@ class Parser:
         return sections, blank_logo
 
     def schedule_episode(self, episode):
-        pattern_senn = r'^(\d{1,3})[ ]сезон[ ](\d{1,3})[ ]серия$'
-        pattern_special = r'^Спецэпизод[ ](\d{1,3})$'
-        pattern_url = r"^goTo\('(\/series\/.*)',false\);$"
-        pattern_date = r'\d{2}.\d{2}.\d{4}'
-        column_alpha = episode.find('td', {'class': 'alpha'})
-        column_beta = episode.find('td', {'class': 'beta'})
-        column_gamma = episode.find('td', {'class': 'gamma'})
-        column_delta = episode.find('td', {'class': 'delta'})
-        poster = poster_from_data(urljoin('http:', column_alpha.find('img').get('src')))
-        show_name = column_alpha.find('div', {'class': 'en small-text'}).text
-        show_name_ru = column_alpha.find('div', {'class': 'ru'}).text
-        season_episode = column_beta.find('div', {'class': 'count'}).text
-        try:
-            re_season_episode = re.match(pattern_senn, season_episode)
-            season_number, number = re_season_episode.group(1, 2)
-        except AttributeError:
-            re_season_episode = re.match(pattern_special, season_episode)
-            season_number = 999
-            number = re_season_episode.group(1)
-        re_url = re.match(pattern_url, column_beta.get('onclick'))
-        ep_url = urljoin(self.settings.source, re_url[1])
-        [name, _, name_ru] = [x.text for x in column_gamma]
-        if name_ru:
-            name, name_ru = name_ru, name
-        ep_date = re.findall(pattern_date, column_delta.text)[0]
-        episode = {
-            'show_name': show_name,
-            'show_name_ru': show_name_ru,
-            'season_number': int(season_number),
-            'number': int(number),
-            'name': name,
-            'name_ru': name_ru,
-            'url': ep_url,
-            'poster': poster,
-            'date': ep_date,
-        }
+        is_movie = episode.find('div', {'class': 'serie-number-box'}).text
+        is_movie = is_movie.join(is_movie.split())
+        is_movie = (is_movie == 'Фильм')
+        if is_movie:
+            pattern_url = r"^goTo\('(\/movies\/.*)',false\);$"
+            pattern_date = r'\d{2}.\d{2}.\d{4}'
+            column_alpha = episode.find('td', {'class': 'alpha'})
+            column_beta = episode.find('td', {'class': 'beta'})
+            column_gamma = episode.find('td', {'class': 'gamma'})
+            column_delta = episode.find('td', {'class': 'delta'})
+            poster = poster_from_data(urljoin('http:', column_alpha.find('img').get('src')))
+            re_url = re.match(pattern_url, column_beta.get('onclick'))
+            ep_url = urljoin(self.settings.source, re_url[1])
+            [name, _, name_ru] = [x.text for x in column_gamma]
+            if name_ru:
+                name, name_ru = name_ru, name
+            ep_date = re.findall(pattern_date, column_delta.text)[0]
+            episode = {
+                'name': name,
+                'name_ru': name_ru,
+                'url': ep_url,
+                'poster': poster,
+                'date': ep_date,
+            }
+        else:
+            pattern_senn = r'^(\d{1,3})[ ]сезон[ ](\d{1,3})[ ]серия$'
+            pattern_special = r'^Спецэпизод[ ](\d{1,3})$'
+            pattern_url = r"^goTo\('(\/series\/.*)',false\);$"
+            pattern_date = r'\d{2}.\d{2}.\d{4}'
+            column_alpha = episode.find('td', {'class': 'alpha'})
+            column_beta = episode.find('td', {'class': 'beta'})
+            column_gamma = episode.find('td', {'class': 'gamma'})
+            column_delta = episode.find('td', {'class': 'delta'})
+            poster = poster_from_data(urljoin('http:', column_alpha.find('img').get('src')))
+            show_name = column_alpha.find('div', {'class': 'en small-text'}).text
+            show_name_ru = column_alpha.find('div', {'class': 'ru'}).text
+            season_episode = column_beta.find('div', {'class': 'count'}).text
+            try:
+                re_season_episode = re.match(pattern_senn, season_episode)
+                season_number, number = re_season_episode.group(1, 2)
+            except AttributeError:
+                re_season_episode = re.match(pattern_special, season_episode)
+                season_number = 999
+                number = re_season_episode.group(1)
+            re_url = re.match(pattern_url, column_beta.get('onclick'))
+            ep_url = urljoin(self.settings.source, re_url[1])
+            [name, _, name_ru] = [x.text for x in column_gamma]
+            if name_ru:
+                name, name_ru = name_ru, name
+            ep_date = re.findall(pattern_date, column_delta.text)[0]
+            episode = {
+                'show_name': show_name,
+                'show_name_ru': show_name_ru,
+                'season_number': int(season_number),
+                'number': int(number),
+                'name': name,
+                'name_ru': name_ru,
+                'url': ep_url,
+                'poster': poster,
+                'date': ep_date,
+            }
         return episode
 
     def send_schedules(self, sections, blank_logo):
@@ -411,7 +535,7 @@ class Parser:
 class Conf:
 
     def __init__(self):
-        self.work_dir = os.path.join(os.getenv('HOME'), '.LostFilmParser')
+        self.work_dir = os.path.join(os.getenv('HOME'), '.config', 'LostFilmParser')
         self.config_file = os.path.join(self.work_dir, 'settings.conf')
         self.config = ConfigParser()
         self.exist()
@@ -420,7 +544,7 @@ class Conf:
         self.chatid = self.read('Settings', 'chatid')
         self.source = self.read('System', 'source')
         self.rss = urljoin(self.source, 'rss.xml')
-        self.schedule = urljoin(self.source, 'schedule')
+        self.schedule = urljoin(self.source, 'schedule/type_0')
         self.db_url = self.db_url_insert_path(self.read('System', 'db'))
         self.db_episode_lifetime = int(self.read('System', 'lifetime'))
 
