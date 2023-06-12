@@ -635,7 +635,7 @@ class TlgrmBot:
 if __name__ == '__main__':
     lostfilm = Parser()
     if lostfilm.online() and lostfilm.bot.alive():
-        lostfilm.scheduler()
         lostfilm.check_old_episodes()
         lostfilm.check_new_entries()
         lostfilm.send_new_episodes()
+        lostfilm.scheduler()
