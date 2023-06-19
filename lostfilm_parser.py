@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from telebot.types import InputMediaPhoto
 from feedparser import parse as feed_parse
 from playhouse.shortcuts import model_to_dict
+from telebot.apihelper import ApiTelegramException
 
 
 db_proxy = peewee.DatabaseProxy()
@@ -380,7 +381,7 @@ class Parser:
             else:
                 caption = generate_movie_caption(episode)
             try:
-                message_id = self.bot.send_poster_with_caption(poster, caption)
+                message_id = self.bot.send_poster_with_caption(poster, caption).message_id
             except Exception:
                 self.new_episodes.remove(episode)
             else:
@@ -524,7 +525,11 @@ class Parser:
                     for episode in self.timetable[section]:
                         posters.append(episode['poster'])
                     collage = generate_schedule_collage(blank_logo, posters)
-                    message_id = self.bot.send_poster_with_caption(collage, caption)
+                    try:
+                        message_id = self.bot.send_poster_with_caption(collage, caption).message_id
+                    except ApiTelegramException:
+                        message = self.bot.send_poster_with_caption(collage, '')
+                        message_id = self.bot.reply_to(message, caption)
                     self.schedule.create(
                         id=message_id,
                         date=self.today_utc,
@@ -597,7 +602,7 @@ class TlgrmBot:
             caption=caption,
             parse_mode='MarkdownV2',
         )
-        return message.message_id
+        return message
 
     def edit_caption(self, message_id, caption):
         self.bot.edit_message_caption(
@@ -615,6 +620,15 @@ class TlgrmBot:
             disable_web_page_preview=True,
         )
         return message.message_id
+
+    def reply_to(self, message, text):
+        reply_message = self.bot.reply_to(
+            message=message,
+            text=text,
+            parse_mode='MarkdownV2',
+            disable_web_page_preview=True,
+        )
+        return reply_message.message_id
 
     def edit_poster(self, message_id, poster):
         self.bot.edit_message_media(
