@@ -306,6 +306,8 @@ class Parser:
         for movie in self.movies.select():
             if movie.date.date() < self.old_entries_frontier:
                 movie.delete_instance()
+            elif not movie.description or not movie.name_ru:
+                self.check_missed_data(movie)
         for schedule in self.schedule.select():
             if schedule.date.date() < self.old_entries_frontier:
                 schedule.delete_instance()
@@ -332,7 +334,10 @@ class Parser:
         if need_upd:
             episode.date = episode.date.date()
             episode_as_dict = model_to_dict(episode)
-            caption = generate_episode_caption(episode_as_dict)
+            try:
+                caption = generate_episode_caption(episode_as_dict)
+            except KeyError:
+                caption = generate_movie_caption(episode_as_dict)
             try:
                 self.bot.edit_caption(episode.id, caption)
             except Exception:
