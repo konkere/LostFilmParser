@@ -354,10 +354,14 @@ class Parser:
             else:
                 elem = self.parse_entry_episode(entry)
             if not self.episode_in_db(elem, is_show):
-                new_elem = parse_data_from_entry(entry)
-                new_elem['id'] = None
-                new_elem['is_show'] = is_show
-                self.new_episodes.append(new_elem)
+                try:
+                    new_elem = parse_data_from_entry(entry)
+                except AttributeError:
+                    continue
+                else:
+                    new_elem['id'] = None
+                    new_elem['is_show'] = is_show
+                    self.new_episodes.append(new_elem)
         self.new_episodes.reverse()
 
     def parse_entry_episode(self, entry):
