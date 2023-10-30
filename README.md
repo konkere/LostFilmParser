@@ -4,6 +4,4 @@ Script for parse RSS (also episodes and schedule pages :wink:) from LostFilm web
 
 Python 3.10 required.
 
-Channel with this bot: https://t.me/LostFilmShows ([preview in web](https://t.me/s/LostFilmShows))
-
 After first run: fill data in config → $HOME/.config/LostFilmParser/settings.conf (required in section [Settings] and optional in section [System]).
